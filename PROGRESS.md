@@ -77,7 +77,25 @@
     }
   },
   "recent_changes": {
-    "date": "2025-01-19 Session 3 continued",
+    "date": "2025-01-19 Session 6 - Critical Fixes Completed",
+    "critical_fixes": {
+      "status": "complete",
+      "fixes_applied": [
+        "Fixed NPCServer player ID encoding (WriteGShort instead of WriteShortU)",
+        "Added PLPROP_ALIGNMENT and PLPROP_IPADDR to listserver player data",
+        "Added PLO_ISLEADER packet after level warp",
+        "Added PLO_LISTPROCESSES packet for old clients",
+        "Fixed PLO_SERVERTEXT to send without message (C++ compatibility)",
+        "Fixed login to use PLO_OTHERPLPROPS instead of PLO_PLAYERPROPS",
+        "Fixed SVO_PING response to use WriteGChar encoding",
+        "Uncommented SVO_SENDTEXT for allowed versions config"
+      ],
+      "issues_resolved": [
+        "NPCServer data corruption on listserver (id showing as 61409 instead of 1)",
+        "Client stuck at 'Loading account...' screen",
+        "Server not appearing on public listserver"
+      ]
+    },
     "level_item_implementation": {
       "status": "complete",
       "features": ["25 item type constants", "item name list", "getItemId/getItemName functions", "getItemPlayerProp for item pickup effects"]
@@ -110,7 +128,9 @@
     }
   },
   "known_issues": [
-    "Client stuck at loading account - FIXED",
+    "Client stuck at loading account - FIXED (2025-01-19)",
+    "NPCServer listserver data corruption - FIXED (2025-01-19)",
+    "Server not on public listserver - FIXED (2025-01-19)",
     "Server type showing Graal3D - FIXED",
     "Player count not showing on listserver - FIXED",
     "NPC script integration - pending",

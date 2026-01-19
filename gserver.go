@@ -78,12 +78,40 @@ func (s *Server) Init(serverIP, serverPort, localIP, serverInterface string) err
 	if localIP != "" { s.settings.Set("localip", localIP) }
 	if serverInterface != "" { s.settings.Set("serverinterface", serverInterface) }
 	s.loadConfigFiles()
+	if s.settings.GetBool("serverside", false) { s.initNPCServer() }
 	addr := ":14802"
 	if port := s.settings.Get("serverport"); port != "" { addr = ":" + port }
 	listener, err := net.Listen("tcp", addr)
 	if err != nil { return fmt.Errorf("failed to listen on %s: %w", addr, err) }
 	s.listener = listener
 	return nil
+}
+
+func (s *Server) initNPCServer() {
+	p := &Player{conn: nil, server: s, recvBuffer: make([]byte, 0, 8192), encryption: *NewEncryption(), playerType: PLTYPE_NPCSERVER, cachedLevels: make([]*CachedLevel, 0), rcLargeFiles: make(map[string]string), singleplayerLevels: make(map[string]*Level), channelList: make(map[string]bool), knownFiles: make(map[string]bool), externalPlayers: make(map[uint16]*Player), externalPlayerIdGen: EXTERNALPLAYERID_INIT, firstLevel: true, loaded: true, packetCount: 0, invalidPackets: 0}
+	p.flagList = make(map[string]string)
+	p.folderRights = *NewFilePermissions()
+	p.setServer(s)
+	p.accountName = "(npcserver)"
+	p.id = 1
+	p.character.headImage = s.settings.Get("staffhead")
+	if p.character.headImage == "" { p.character.headImage = "head25.png" }
+	nickName := s.settings.Get("nickname")
+	if nickName == "" { nickName = "NPC-Server" }
+	nickName += " (Server)"
+	p.character.nickName = nickName
+	p.levelName = ""
+	p.lastData = time.Now()
+	p.lastMovement = time.Now()
+	p.lastSave = time.Now()
+	p.last1m = time.Now()
+	p.x = 60
+	p.y = 61
+	p.alignment = 50
+	s.playerMu.Lock()
+	s.players[p.id] = p
+	s.playerMu.Unlock()
+	s.logger.Info("NPC-Server initialized (id=%d account=%s nickname=%s type=%d x=%d y=%d)", p.id, p.accountName, p.character.nickName, p.playerType, int(p.x), int(p.y))
 }
 
 func (s *Server) Run() error {
@@ -218,7 +246,52 @@ func (s *Server) loadServerMessage(){
 	if data, err := s.config.LoadFile("config/servermessage.html"); err == nil { s.serverMessage = string(data) }
 }
 func (s *Server) loadIPBans(){}
-func (s *Server) loadWeapons(print bool){}
+func (s *Server) loadWeapons(print bool){
+	files, err := s.config.ListFiles("weapons/")
+	if err != nil { return }
+	for _, file := range files {
+		if !strings.HasPrefix(file, "weapon") || !strings.HasSuffix(file, ".txt") { continue }
+		if data, err := s.config.LoadFile("weapons/" + file); err == nil {
+			if weapon := parseWeapon(string(data)); weapon != nil {
+				s.weapons[strings.ToLower(weapon.name)] = weapon
+				if print { s.log("       " + weapon.name + "\n") }
+			}
+		}
+	}
+}
+
+func parseWeapon(data string) *Weapon {
+	lines := strings.Split(data, "\n")
+	if len(lines) == 0 || lines[0] != "GRAWP001" { return nil }
+	weapon := &Weapon{}
+	inScript := false
+	var scriptLines []string
+	for i := 1; i < len(lines); i++ {
+		line := strings.TrimSpace(lines[i])
+		if line == "" { continue }
+		if inScript {
+			if line == "SCRIPTEND" {
+				inScript = false
+				weapon.script = strings.Join(scriptLines, "\n")
+				scriptLines = nil
+			} else {
+				scriptLines = append(scriptLines, line)
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "REALNAME ") {
+			weapon.name = strings.TrimSpace(line[8:])
+		} else if strings.HasPrefix(line, "IMAGE ") {
+			weapon.image = strings.TrimSpace(line[6:])
+		} else if strings.HasPrefix(line, "BYTECODE ") {
+			weapon.bytecodeFile = strings.TrimSpace(line[9:])
+		} else if line == "SCRIPT" {
+			inScript = true
+		}
+	}
+	if weapon.name == "" { return nil }
+	return weapon
+}
 func (s *Server) loadClasses(print bool){}
 func (s *Server) loadMaps(print bool){}
 func (s *Server) loadNpcs(print bool){}
@@ -654,6 +727,7 @@ type Account struct {
 	character                                                                                    Character
 	language                                                                                     string
 	x, y, z                                                                                      int16
+	alignment                                                                                    int
 	eloRating, eloDeviation                                                                      float32
 	maxHitpoints, mp, apCounter, horseBombCount                                                  uint8
 	kills, deaths, additionalFlags                                                               uint32
@@ -1004,6 +1078,7 @@ func NewPlayer(conn net.Conn, s *Server) *Player {
 	p.lastMessage = time.Time{}
 	p.x = 60
 	p.y = 61
+	p.alignment = 50
 	return p
 }
 
@@ -1401,6 +1476,21 @@ func (p *Player) handleLogin(packet []byte) bool {
 		p.encryption.gen = ENCRYPT_GEN_3
 	}
 	p.server.logger.Info("Setting encryption gen to %d (ENCRYPT_GEN_3=%d) for client type %d", p.encryption.gen, ENCRYPT_GEN_3, clientType)
+	sigBuf := NewBuffer()
+	sigBuf.WriteByte(PLO_SIGNATURE).WriteByte(73)
+	p.send(sigBuf)
+	if strings.Contains(strings.ToLower(p.server.name), "login") {
+		p.sendPLO_FULLSTOP()
+		ghostBuf := NewBuffer()
+		ghostBuf.WriteByte(PLO_GHOSTICON).WriteByte(1)
+		p.send(ghostBuf)
+	}
+	if clientType&PLTYPE_ANYCLIENT != 0 {
+		p.sendPLO_HASNPCSERVER(p.server.settings.GetBool("serverside", false))
+		unkBuf := NewBuffer()
+		unkBuf.WriteByte(PLO_UNKNOWN168)
+		p.send(unkBuf)
+	}
 	if !p.LoadAccount(account, false) {
 		p.server.logger.Error("Failed to load account for: %s", account)
 		return false
@@ -1409,8 +1499,17 @@ func (p *Player) handleLogin(packet []byte) bool {
 		p.server.logger.Info("Creating new account from default: %s", account)
 		p.SaveAccount()
 	}
-	p.server.logger.Info("Sending PLO_PLAYERPROPS...")
-	p.sendPLO_PLAYERPROPS()
+	p.server.logger.Info("Sending PLO_OTHERPLPROPS (login props)...")
+	buf = NewBuffer()
+	buf.WriteByte(PLO_OTHERPLPROPS).WriteGShort(p.id)
+	buf.WriteGString(p.character.nickName).WriteGString(p.character.gani)
+	buf.WriteGString(p.character.bodyImage).WriteGString(p.character.headImage)
+	buf.WriteGString(p.character.swordImage).WriteGString(p.character.shieldImage)
+	buf.WriteGString(p.character.horseImage).WriteGByte(p.character.sprite)
+	for i := 0; i < 5; i++ { buf.WriteGByte(p.character.colors[i]) }
+	buf.WriteGInt(uint32(p.x)).WriteGInt(uint32(p.y)).WriteGInt(uint32(p.z))
+	buf.WriteGString(p.levelName)
+	p.send(buf)
 	p.server.logger.Info("Sending PLO_CLEARWEAPONS...")
 	p.sendPLO_CLEARWEAPONS()
 	p.server.logger.Info("Sending player flags...")
@@ -1442,13 +1541,23 @@ func (p *Player) handleLogin(packet []byte) bool {
 	}
 	p.server.logger.Info("Warping player to '%s'...", startLevel)
 	p.warp(startLevel, 32, 32)
+	p.server.logger.Info("Sending weapons...")
+	for name, weapon := range p.server.weapons {
+		p.server.logger.Debug("Sending weapon: %s", name)
+		p.sendWeapon(weapon, 1000+uint32(len(name)))
+	}
 	p.server.logger.Info("Sending PLO_RPGWINDOW...")
 	p.sendPLO_RPGWINDOW("Welcome to " + p.server.name)
 	p.server.logger.Info("Sending PLO_STARTMESSAGE...")
 	p.sendPLO_STARTMESSAGE("Welcome to " + p.server.name)
-	p.server.logger.Info("Sending PLO_SERVERTEXT...")
-	p.sendPLO_SERVERTEXT(p.server.serverMessage)
+	p.server.logger.Info("Sending PLO_SERVERTEXT (no message)...")
+	buf = NewBuffer()
+	buf.WriteByte(PLO_SERVERTEXT)
+	p.send(buf)
+	p.sendPLO_LISTPROCESSES()
+	p.sendCompress(true)
 	for _, pl := range p.server.players { if pl.isLoggedIn() && pl != p { p.sendPLO_ADDPLAYER(pl) } }
+	p.sendCompress(true)
 	p.server.logger.Info("[%s] Player logged in (type=%d)", account, clientType)
 	return true
 }
@@ -1539,9 +1648,13 @@ func (p *Player) sendPacket(packet []byte) {
 	p.server.logger.Debug("sendPacket: Writing %d bytes: % X", len(data), data)
 	p.conn.Write(data)
 }
+
+func (p *Player) sendCompress(forceSend bool) {
+	// Packets sent immediately now, queue not needed
+}
+
 func (p *Player) send(buf *Buffer) {
 	data := append(buf.Bytes(), '\n')
-	p.server.logger.Debug("Sending %d bytes: % X", len(data), data)
 	p.sendPacket(data)
 }
 func (p *Player) disconnect()              { p.conn.Close(); p.server.DeletePlayer(p) }
@@ -1869,6 +1982,12 @@ func (p *Player) sendPLO_SIGNATURE(nickName string) bool {
 	p.send(buf)
 	return true
 }
+func (p *Player) sendPLO_FULLSTOP() bool {
+	buf := NewBuffer()
+	buf.WriteByte(PLO_FULLSTOP)
+	p.send(buf)
+	return true
+}
 func (p *Player) sendPLO_BADDYHURT(baddyId uint32, hurtPower int) bool {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_BADDYHURT).WriteGInt(baddyId).WriteGByte(byte(hurtPower))
@@ -1887,6 +2006,24 @@ func (p *Player) sendPLO_NPCWEAPONDEL(weaponId uint32) bool {
 	p.send(buf)
 	return true
 }
+
+func (p *Player) sendWeapon(weapon *Weapon, weaponId uint32) bool {
+	if weapon == nil { return false }
+	buf := NewBuffer()
+	buf.WriteByte(PLO_NPCWEAPONADD).WriteGInt(weaponId).WriteGString(weapon.image).WriteGString("")
+	p.send(buf)
+	if len(weapon.bytecode) > 0 {
+		p.server.logger.Debug("sendWeapon: sending bytecode for %s (%d bytes)", weapon.name, len(weapon.bytecode))
+		propBuf := NewBuffer()
+		propBuf.WriteByte(NPCPROP_CLASS).WriteShort(0).WriteString("\n")
+		p.send(propBuf)
+		buf2 := NewBuffer()
+		buf2.WriteByte(197).Write(weapon.bytecode).WriteString(",").WriteGInt(uint32(len(weapon.bytecode))).WriteString("\n")
+		p.send(buf2)
+	}
+	return true
+}
+
 func (p *Player) sendPLO_RC_ADMINMESSAGE(message string) bool {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_RC_ADMINMESSAGE).WriteGString(message)
@@ -1966,6 +2103,18 @@ func (p *Player) sendPLO_MINIMAP() bool {
 	p.send(buf)
 	return true
 }
+func (p *Player) sendPLO_ISLEADER() bool {
+	buf := NewBuffer()
+	buf.WriteByte(PLO_ISLEADER)
+	p.send(buf)
+	return true
+}
+func (p *Player) sendPLO_LISTPROCESSES() bool {
+	buf := NewBuffer()
+	buf.WriteByte(PLO_LISTPROCESSES)
+	p.send(buf)
+	return true
+}
 func (p *Player) sendPLO_RPGWINDOW(message string) bool {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_RPGWINDOW).WriteGString(message)
@@ -2024,6 +2173,8 @@ func (p *Player) warp(levelName string, x float64, y float64) {
 	for _, sign := range level.signs {
 		p.sendPLO_SIGN(sign)
 	}
+	p.sendPLO_NEWWORLDTIME(p.server.serverTime)
+	p.sendPLO_ISLEADER()
 	p.loaded = true
 	p.server.logger.Debug("warp: Player %s warped to %s at (%.0f, %.0f)", p.accountName, levelName, x, y)
 }
@@ -5332,6 +5483,8 @@ func (n *NPC) runTimeout()     { /* TODO: Implement timeout event */ }
 // ============ WEAPON ============
 type Weapon struct {
 	name, image, script string
+	bytecode            []byte
+	bytecodeFile        string
 	defPlayer           bool
 	modified            bool
 }
@@ -5752,10 +5905,10 @@ func (sl *ServerList) connectServer() bool {
 		buf.WriteGChar(SVO_SERVERHQLEVEL).WriteByte(byte(hqLevel))
 	}
 	sl.sendPacket(buf.Bytes())
-	// Packet 5: SVO_SENDTEXT (commented out - needs allowed versions)
-	// buf = NewBuffer()
-	// buf.WriteGChar(SVO_SENDTEXT).WriteString8("Listserver,settings,allowedversions,")
-	// sl.sendPacket(buf.Bytes())
+	// Packet 5: SVO_SENDTEXT - send allowed versions config
+	buf = NewBuffer()
+	buf.WriteGChar(SVO_SENDTEXT).WriteString8("Listserver,settings,allowedversions,")
+	sl.sendPacket(buf.Bytes())
 	sl.sendPlayers()
 	return true
 }
@@ -5884,7 +6037,7 @@ func (sl *ServerList) processPacket(data []byte) {
 		sl.server.logger.Error("List server error: %s", string(data[1:]))
 	case SVI_PING:
 		buf := NewBuffer()
-		buf.WriteByte(SVO_PING)
+		buf.WriteGChar(SVO_PING)
 		sl.SendPacket(buf.Bytes())
 	}
 }
@@ -5944,15 +6097,18 @@ func (sl *ServerList) sendPlayers() {
 	sl.sendPacket(buf.Bytes())
 	for _, player := range sl.server.players {
 		if player != nil {
+			sl.server.logger.Debug("[LISTSERVER] Sending player to listserver: id=%d type=%d account=%s nickname=%s level=%s x=%d y=%d", player.id, player.playerType, player.accountName, player.character.nickName, player.levelName, int(player.x), int(player.y))
 			buf = NewBuffer()
 			buf.WriteGChar(SVO_PLYRADD)
-			buf.WriteShort(int16(player.id))
+			buf.WriteGShort(uint16(player.id))
 			buf.WriteByte(byte(player.playerType))
 			buf.WriteByte(PLPROP_ACCOUNTNAME).WriteString8Encoded(player.accountName)
 			buf.WriteByte(PLPROP_NICKNAME).WriteString8Encoded(player.character.nickName)
 			buf.WriteByte(PLPROP_CURLEVEL).WriteString8Encoded(player.levelName)
 			buf.WriteByte(PLPROP_X).WriteGString(strconv.Itoa(int(player.x)))
 			buf.WriteByte(PLPROP_Y).WriteGString(strconv.Itoa(int(player.y)))
+			buf.WriteByte(PLPROP_ALIGNMENT).WriteGString(strconv.Itoa(player.alignment))
+			buf.WriteByte(PLPROP_IPADDR).WriteGString(player.accountIpStr)
 			sl.sendPacket(buf.Bytes())
 		}
 	}
@@ -5961,19 +6117,21 @@ func (sl *ServerList) AddPlayer(player *Player) {
 	if !sl.connected { return }
 	buf := NewBuffer()
 	buf.WriteGChar(SVO_PLYRADD)
-	buf.WriteShort(int16(player.id))
+	buf.WriteGShort(uint16(player.id))
 	buf.WriteByte(byte(player.playerType))
 	buf.WriteByte(PLPROP_ACCOUNTNAME).WriteString8Encoded(player.accountName)
 	buf.WriteByte(PLPROP_NICKNAME).WriteString8Encoded(player.character.nickName)
 	buf.WriteByte(PLPROP_CURLEVEL).WriteString8Encoded(player.levelName)
 	buf.WriteByte(PLPROP_X).WriteGString(strconv.Itoa(int(player.x)))
 	buf.WriteByte(PLPROP_Y).WriteGString(strconv.Itoa(int(player.y)))
+	buf.WriteByte(PLPROP_ALIGNMENT).WriteGString(strconv.Itoa(player.alignment))
+	buf.WriteByte(PLPROP_IPADDR).WriteGString(player.accountIpStr)
 	sl.SendPacket(buf.Bytes())
 }
 func (sl *ServerList) DeletePlayer(player *Player) {
 	if !sl.connected { return }
 	buf := NewBuffer()
-	buf.WriteGChar(SVO_PLYRREM).WriteString8Encoded(player.accountName)
+	buf.WriteGChar(SVO_PLYRREM).WriteGShort(uint16(player.id))
 	sl.SendPacket(buf.Bytes())
 }
 func (sl *ServerList) Disconnect() {
