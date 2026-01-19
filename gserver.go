@@ -1423,8 +1423,15 @@ func (p *Player) handleLogin(packet []byte) bool {
 	p.sendPLO_NPCWEAPONDEL(101)
 	p.server.logger.Info("Sending PLO_UNKNOWN190...")
 	p.sendPLO_UNKNOWN190()
-	p.server.logger.Info("Warping player to 'empty'...")
-	p.warp("empty", 32, 32)
+	startLevel := p.server.settings.Get("startlevel")
+	if startLevel == "" {
+		startLevel = p.server.settings.Get("unstickmelevel")
+	}
+	if startLevel == "" {
+		startLevel = "onlinestartlocal.nw"
+	}
+	p.server.logger.Info("Warping player to '%s'...", startLevel)
+	p.warp(startLevel, 32, 32)
 	p.server.logger.Info("Sending PLO_RPGWINDOW...")
 	p.sendPLO_RPGWINDOW("Welcome to " + p.server.name)
 	p.server.logger.Info("Sending PLO_STARTMESSAGE...")
@@ -1956,12 +1963,16 @@ func (p *Player) sendPLO_RPGWINDOW(message string) bool {
 	return true
 }
 func (p *Player) warp(levelName string, x float64, y float64) {
-	level := p.server.loadLevel(levelName)
+	cleanLevelName := levelName
+	if strings.HasSuffix(levelName, ".nw") || strings.HasSuffix(levelName, ".zelda") {
+		cleanLevelName = levelName[:len(levelName)-4]
+	}
+	level := p.server.loadLevel(cleanLevelName)
 	if level == nil {
-		p.server.logger.Error("warp: Failed to load level: %s", levelName)
+		p.server.logger.Error("warp: Failed to load level: %s", cleanLevelName)
 		return
 	}
-	levelPath := "world/levels/" + levelName + ".nw"
+	levelPath := "world/levels/" + cleanLevelName + ".nw"
 	if !level.loadLevel(p.server, levelPath) {
 		p.server.logger.Warning("warp: Could not load level file %s, using empty level", levelPath)
 	}
