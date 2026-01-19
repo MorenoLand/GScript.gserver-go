@@ -1653,10 +1653,20 @@ func (p *Player) sendPLO_LEVELNAME(levelName string) bool {
 	p.send(buf)
 	return true
 }
-func (p *Player) sendPLO_LEVELCHEST(x, y int16, itemIdx int, open bool) bool {
+func (p *Player) sendPLO_LEVELCHEST(chest *LevelChest, open bool) bool {
 	buf := NewBuffer()
-	buf.WriteByte(PLO_LEVELCHEST).WriteShort(x).WriteShort(y).WriteGInt(uint32(itemIdx))
-	if open { buf.WriteGByte(1) } else { buf.WriteGByte(0) }
+	buf.WriteByte(PLO_LEVELCHEST)
+	if open {
+		buf.WriteGByte(1)
+		buf.WriteGChar(byte(chest.x))
+		buf.WriteGChar(byte(chest.y))
+	} else {
+		buf.WriteGByte(0)
+		buf.WriteGChar(byte(chest.x))
+		buf.WriteGChar(byte(chest.y))
+		buf.WriteGChar(byte(chest.itemType))
+		buf.WriteGChar(byte(chest.signIndex))
+	}
 	p.send(buf)
 	return true
 }
@@ -2203,7 +2213,14 @@ func (p *Player) msgPLI_OPENCHEST(packet []byte) bool {
 	buf := NewBufferFromBytes(packet[1:])
 	x := int(buf.ReadGChar())
 	y := int(buf.ReadGChar())
-	if level, ok := p.server.levels[p.levelName]; ok { for _, chest := range level.chests { if chest.x == x && chest.y == y { p.sendPLO_LEVELCHEST(int16(chest.x), int16(chest.y), int(chest.itemType), true); break } } }
+	if level, ok := p.server.levels[p.levelName]; ok {
+		for _, chest := range level.chests {
+			if chest.x == x && chest.y == y {
+				p.sendPLO_LEVELCHEST(chest, true)
+				break
+			}
+		}
+	}
 	return true
 }
 func (p *Player) msgPLI_PUTNPC(packet []byte) bool {
@@ -4964,8 +4981,9 @@ func (l *Level) loadNW(server *Server, levelName string) bool {
 			if len(parts) != 5 { continue }
 			chestx, _ := strconv.Atoi(parts[1])
 			chesty, _ := strconv.Atoi(parts[2])
+			itemType := getItemId(parts[3])
 			signIdx, _ := strconv.Atoi(parts[4])
-			l.chests = append(l.chests, &LevelChest{x: chestx, y: chesty, signIndex: signIdx})
+			l.chests = append(l.chests, &LevelChest{x: chestx, y: chesty, itemType: itemType, signIndex: signIdx})
 		case "SIGN":
 			if len(parts) != 3 { continue }
 			signx, _ := strconv.Atoi(parts[1])
