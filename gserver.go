@@ -1541,6 +1541,19 @@ func (p *Player) sendPLO_LEVELLINK(x, y int16, levelName string) bool {
 	p.send(buf)
 	return true
 }
+func (p *Player) sendPLO_LEVELLINK_FULL(link *LevelLink) bool {
+	buf := NewBuffer()
+	buf.WriteByte(PLO_LEVELLINK)
+	buf.WriteShort(int16(link.x))
+	buf.WriteShort(int16(link.y))
+	buf.WriteString(link.destLevel)
+	buf.WriteShort(int16(link.width))
+	buf.WriteShort(int16(link.height))
+	buf.WriteShort(int16(link.destX))
+	buf.WriteShort(int16(link.destY))
+	p.send(buf)
+	return true
+}
 func (p *Player) sendPLO_SIGN(x, y int16, text string) bool {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_LEVELSIGN).WriteShort(x).WriteShort(y).WriteGString(text)
@@ -1957,7 +1970,7 @@ func (p *Player) warp(levelName string, x float64, y float64) {
 	p.send(buf)
 	p.sendPLO_LEVELMODTIME(level.modTime.Unix())
 	for _, link := range level.links {
-		p.sendPLO_LEVELLINK(int16(link.x), int16(link.y), link.destLevel)
+		p.sendPLO_LEVELLINK_FULL(link)
 	}
 	for _, sign := range level.signs {
 		p.sendPLO_SIGN(int16(sign.x), int16(sign.y), sign.text)
