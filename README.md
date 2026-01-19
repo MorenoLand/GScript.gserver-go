@@ -44,7 +44,9 @@ How-to setup a server:
 
 ## Implementation Status
 
-**Progress: 67% (31/49 files converted)**
+**Progress: 70% (31/44 files convertible without V8)**
+
+**Note:** 13 remaining files are V8-specific (scripting/*) or blocked on V8 integration. All non-V8 conversion work is complete.
 
 **Note on Completion:** The percentage above represents **files converted from C++ to Go**, not functional completion. Many systems have code converted but are not yet tested or fully functional. See "Testing Status" below for actual working features.
 
@@ -74,6 +76,7 @@ How-to setup a server:
 | Guild System | ✅ Complete | Add/remove members, set/remove guilds, nickname updates |
 | Word Filter | ✅ Complete | Pattern matching, precision (abs/%), word position (full/start/part), actions: log/tellrc/replace/warn/jail/ban |
 | Baddy System | ✅ Complete | 10 baddy types, 10 modes (WALK/LOOK/HUNT/HURT/DIE/SWAMPSHOT/HAREJUMP/OCTOSHOT/DEAD), item dropping, props, verses, respawn |
+| Script Classes | ✅ Complete | Class storage, NC add/edit/delete handlers, UPDATECLASS packet sends class code to client |
 
 ### 🚧 Partial (Code Converted, Needs Testing/Completion)
 
