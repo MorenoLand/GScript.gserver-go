@@ -83,11 +83,15 @@ How-to setup a server:
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| GS1/GS2 Scripting | ❌ Pending | V8 integration |
+| GS2 Scripting (Server-side) | ❌ Pending | V8 integration for server-side script execution |
+| GS2 Compiler (Server-side) | ❌ Pending | Server-side GS2 compiler not yet implemented |
+| GS2 Scripting (Client-side) | ✅ Supported | Client-side GS2 scripts work normally with existing GS2 compiler |
 | .zelda Level Parsing | ❌ Pending | .zelda format with RLE compression |
 | Level Board Data | ❌ Pending | .nw BOARD token parsing |
 | File Transfers | ❌ Pending | Upload/download system |
 | Word Filter | ❌ Pending | Chat filtering system |
+
+**Note:** V8 is used ONLY for server-side script execution. Client-side GS2 scripts continue to work with the existing GS2 compiler - no changes to client-side script handling. A server-side GS2 compiler has not been implemented yet.
 
 ## Architecture
 
@@ -324,13 +328,13 @@ The gserver will load weapon_bytecode/name_of_file and use the bytecode containe
 
 ## Development Roadmap
 
-1. **Fix client login** - Verify all packets sending correctly
-2. **Level file parsing** - Implement .nw and .zelda readers
-3. **NPC system** - Complete NPC types and script integration
-4. **Weapon system** - Load weapon files, implement weapon packets
-5. **RC protocol** - Complete remaining packet handlers
-6. **NC protocol** - NPC server communication
-7. **Scripting** - V8 integration
+1. **Level file parsing** - Implement .nw BOARD token parsing and .zelda RLE decoding
+2. **NPC system** - Complete NPC types and AI behaviors
+3. **Weapon system** - Load weapon files, implement weapon packets
+4. **Server-side GS2 compiler** - Create GS2 compiler that runs on server (V8 integration for execution)
+5. **Server-side scripting** - V8 integration for NPC/weapon scripts (client-side GS2 already works)
+6. **File transfer system** - Upload/download functionality
+7. **Word filter** - Chat filtering system
 
 ## Credits
 
