@@ -120,7 +120,8 @@ How-to setup a server:
 
 | Feature | Status | Issue |
 |---------|--------|--------|
-| Login Flow | ⚠️ Partial | Account auth works, level data loads, client connection issue needs verification |
+| Login Flow | ✅ Fixed | Account auth, level data, all packets (PLO_ISLEADER, PLO_LISTPROCESSES, PLO_OTHERPLPROPS) |
+| Listserver Registration | ✅ Fixed | SVO_PING, SVO_SERVERHQPASS, allowed versions, player props (ALIGNMENT, IPADDR) |
 | RC Protocol | ⚠️ Untested | 27 packet handlers implemented but not verified with RC client |
 | NC Protocol | ⚠️ Untested | 18 packet handlers implemented but not verified |
 
@@ -172,16 +173,23 @@ gserver-go/
 - GEN_5: Zlib/BZ2/none + XOR encryption
 
 **Login Flow (Packets sent in order):**
-1. PLO_PLAYERPROPS - Player properties
-2. PLO_CLEARWEAPONS - Clear weapon slots
-3. PLO_FLAGSET x10 - Head, body, sword, shield, colors, sprite
-4. PLO_FLAGSET - Server flags
-5. PLO_NPCWEAPONDEL x2 - Remove Bomb/Bow default weapons
-6. PLO_UNKNOWN190 - Unknown 0xBE packet
-7. warp() - Load level, spawn player
-8. PLO_RPGWINDOW - Welcome message
-9. PLO_STARTMESSAGE - Server start message
-10. PLO_SERVERTEXT - Server text display
+1. PLO_SIGNATURE (0x49) - More than 8 players indicator
+2. PLO_UNKNOWN168 - Unknown packet for clients
+3. PLO_HASNPCSERVER - NPC server indicator (clients only)
+4. PLO_OTHERPLPROPS - Player properties (NOT PLO_PLAYERPROPS)
+5. PLO_CLEARWEAPONS - Clear weapon slots
+6. PLO_FLAGSET x10 - Head, body, sword, shield, colors, sprite
+7. Server flags (PLO_FLAGSET) - Server configuration
+8. PLO_NPCWEAPONDEL x2 - Remove Bomb/Bow default weapons
+9. PLO_UNKNOWN190 - Unknown 0xBE packet
+10. warp() - Load level, spawn player
+11. Weapons - Send server weapons
+12. PLO_RPGWINDOW - Welcome message
+13. PLO_STARTMESSAGE - Server start message
+14. PLO_SERVERTEXT - Server text (NO message, just packet ID)
+15. PLO_LISTPROCESSES - Process list (old clients < v6.015)
+16. PLO_ADDPLAYER - Send existing players
+17. PLO_ISLEADER - Level leader indicator (after warp, sets loaded=true)
 
 ## servers.txt
 
@@ -336,6 +344,20 @@ The gserver will load weapon_bytecode/name_of_file and use the bytecode containe
 
 ## Recent Development
 
+### 2026-01-19
+
+**Critical Fixes: Client Login, Listserver Registration, NPCServer Data**
+- Fixed NPCServer player ID encoding (WriteGShort for proper 7-bit encoding)
+- Added PLPROP_ALIGNMENT and PLPROP_IPADDR to listserver player data
+- Added PLO_ISLEADER packet after level warp (state transition)
+- Added PLO_LISTPROCESSES packet for old clients (< v6.015)
+- Fixed PLO_SERVERTEXT to send without message (C++ compatibility)
+- Fixed login to use PLO_OTHERPLPROPS instead of PLO_PLAYERPROPS
+- Fixed SVO_PING response to use WriteGChar encoding
+- Uncommented SVO_SENDTEXT for allowed versions config
+
+All fixes based on direct C++ source analysis in SESSION01/GServer-v2.
+
 ### 2026-01-18
 
 **Fixed: Blocking I/O in OnRecv()**
@@ -369,10 +391,12 @@ The gserver will load weapon_bytecode/name_of_file and use the bytecode containe
 
 ## Known Issues
 
-- Client may still hang at "Loading account..." - packet handling needs verification
-- Level file loading (.nw/.zelda) not implemented - levels created empty
-- NPC script integration missing
-- Weapon system incomplete
+- ~~Client may hang at "Loading account..."~~ - FIXED (2026-01-19)
+- ~~NPCServer data corruption on listserver~~ - FIXED (2026-01-19)
+- ~~Server not appearing on public listserver~~ - FIXED (2026-01-19)
+- Level file loading (.nw/.zelda) implemented, needs client testing
+- NPC script integration pending V8
+- Weapon system complete except script execution
 - Some RC packet handlers still need implementation
 
 ## Development Roadmap
