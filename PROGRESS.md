@@ -1,7 +1,7 @@
 {
-  "overall_progress": "67%",
-  "files_converted": "31/49",
-  "last_updated": "2026-01-19 Session 5",
+  "overall_progress": "69%",
+  "files_converted": "31/44 (converting remaining 13 files blocked by V8)",
+  "last_updated": "2026-01-19 Session 6",
   "source": "C:\\Users\\timw\\Desktop\\SESSION01\\GServer-v2",
   "target": "C:\\Users\\timw\\Desktop\\SESSION01\\gserver-go",
   "core_files": {
@@ -129,14 +129,41 @@
     "critical_blocker": "V8 Scripting Integration - server-side GS2/GS5 execution needed for NPC AI, weapon behaviors, and full gameplay interactivity"
   },
   "next_priorities": [
-    "Test client connection with actual level files",
-    "Verify warp() sends correct level board packet",
-    "Add missing post-warp packets (PLO_LEVELMODTIME, PLO_LEVELLINK, PLO_SIGNS, PLO_CHESTS)",
-    "V8 integration for server-side GS2/GS5 scripting",
-    "NPC AI and weapon behaviors with script execution",
-    "Weapon system full implementation",
-    "File transfer system"
+    "Test client connection with actual .nw and .zelda level files",
+    "V8 integration for server-side GS2/GS5 scripting (MAJOR BLOCKER)",
+    "GS2 compiler implementation for server-side script compilation",
+    "NPC AI and behaviors with script execution (blocked by V8)",
+    "Weapon script execution (blocked by V8)",
+    "File transfer system",
+    "Player script execution (blocked by V8)",
+    "Animation system with GS2 scripts (blocked by V8)"
   ],
+  "blockers": {
+    "v8_scripting": {
+      "status": "not_implemented",
+      "description": "V8 JavaScript engine integration needed for server-side GS2/GS5 script execution",
+      "files_blocked": [
+        "Weapon.cpp (332 lines) - Weapon script loading and execution",
+        "NPC.cpp (1936 lines) - NPC AI and script behaviors",
+        "PlayerScripts.cpp (89 lines) - Player script handlers",
+        "GameAni.cpp (109 lines) - Animation scripts",
+        "All scripting/* files - V8 bindings and script engine"
+      ],
+      "dependencies": [
+        "V8 library integration (CGo or external library)",
+        "GS2 compiler implementation",
+        "Script class system",
+        "Script execution context"
+      ]
+    },
+    "optional_features": {
+      "upnp": {
+        "status": "not_implemented",
+        "description": "UPnP port forwarding for automatic router configuration",
+        "notes": "Optional feature, requires miniupnp C library bindings"
+      }
+    }
+  },
   "package_system": {
     "status": "complete",
     "packets_implemented": ["VERIFYWANTSEND", "UPDATEPACKAGEREQUESTFILE"],
