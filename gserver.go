@@ -1963,10 +1963,8 @@ func (p *Player) sendPLO_RPGWINDOW(message string) bool {
 	return true
 }
 func (p *Player) warp(levelName string, x float64, y float64) {
-	cleanLevelName := levelName
-	if strings.HasSuffix(levelName, ".nw") || strings.HasSuffix(levelName, ".zelda") {
-		cleanLevelName = levelName[:len(levelName)-4]
-	}
+	cleanLevelName := strings.TrimSuffix(levelName, ".nw")
+	cleanLevelName = strings.TrimSuffix(cleanLevelName, ".zelda")
 	level := p.server.loadLevel(cleanLevelName)
 	if level == nil {
 		p.server.logger.Error("warp: Failed to load level: %s", cleanLevelName)
