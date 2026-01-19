@@ -44,6 +44,8 @@ How-to setup a server:
 
 ## Implementation Status
 
+**Progress: 61% (29/49 files converted)**
+
 ### ✅ Completed
 
 | Component | Status | Notes |
@@ -52,21 +54,29 @@ How-to setup a server:
 | GEN Encryption | ✅ Complete | GEN_1-5 with zlib/bz2 compression |
 | List Server | ✅ Complete | Registration, hq_level packet, server info updates |
 | Login Packets | ✅ Complete | 10+ pre-warp packets (PLAYERPROPS, FLAGSET, warp, etc.) |
-| Level System | ✅ Complete | .nw file parsing (BOARD, CHEST, LINK, SIGN, BADDY, NPC), player management, warping |
 | Account System | ✅ Complete | Account loading/saving (GRACC001 format) |
 | Config Loading | ✅ Complete | serveroptions.txt, adminconfig.txt, serverflags.txt (fixed path bug) |
 | File System | ✅ Complete | heads, bodies, swords, shields, ganis, images, sounds, levels |
-| Level Board Data | ✅ Complete | PLO_RAWDATA with 8193-byte packets (1 header + 64x64 tiles) |
-| Packet Sending | ✅ Complete | PLO_LEVELNAME, PLO_LEVELMODTIME, PLO_LEVELLINK, PLO_LEVELSIGN |
-| RC Protocol | 🚧 Partial | 30+ packet handlers implemented, file browser, admin commands |
-| Packet Handlers | 🚧 Partial | 162 PLI packets, basic game mechanics implemented |
+| RC Protocol (27 packets) | ✅ Complete | All server options, folder ops, player props, account management, file browser, chat |
+| NC Protocol (18 packets) | ✅ Complete | NPC management, weapon/class operations, level list |
+| Item System | ✅ Complete | 25 item types with pickup effects |
+| Sign System | ✅ Complete | Encoding/decoding with custom character tables |
+| Map Loading | ✅ Complete | BIGMAP and GMAP formats with level positioning |
+| Board Changes | ✅ Complete | Tile swap, timeout support, board packet generation |
+| Level Links | ✅ Complete | Link parsing, serialization, getters/setters |
+| File Permissions | ✅ Complete | Read/write flags, regex wildcard matching |
+| Package System | ✅ Complete | CRC32 checksums, file list, reload support |
+| Trigger Commands | ✅ Complete | 13 commands: weapons, groups, guilds, RC chat |
+| Guild System | ✅ Complete | Add/remove members, set/remove guilds, nickname updates |
 
-### 🚧 In Progress
+### 🚧 Partial
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| NPC System | 🚧 Partial | NPCs can be loaded from .nw files, script integration pending |
-| Weapon System | 🚧 Partial | Weapons can be deleted, full weapon loading pending |
+| Level Loading | 🚧 Partial | Level struct exists, .nw/.zelda parsing not implemented |
+| NPC System | 🚧 Partial | NPC struct exists, AI and script integration pending |
+| Weapon System | 🚧 Partial | Weapon struct exists, script loading pending |
+| Player Scripts | 🚧 Partial | UPDATEGANI, UPDATESCRIPT, UPDATECLASS handlers exist |
 | Packet Handlers | 🚧 Partial | Basic handlers done, some PLI packets need completion |
 
 ### ❌ Not Started
@@ -74,10 +84,10 @@ How-to setup a server:
 | Component | Status | Notes |
 |-----------|--------|-------|
 | GS1/GS2 Scripting | ❌ Pending | V8 integration |
-| .zelda Level Parsing | ❌ Pending | .zelda format with RLE compression (lower priority) |
-| NC Protocol | ❌ Pending | NPC server communication |
+| .zelda Level Parsing | ❌ Pending | .zelda format with RLE compression |
+| Level Board Data | ❌ Pending | .nw BOARD token parsing |
 | File Transfers | ❌ Pending | Upload/download system |
-| Weapon Scripts | ❌ Pending | Weapon script loading/execution |
+| Word Filter | ❌ Pending | Chat filtering system |
 
 ## Architecture
 
