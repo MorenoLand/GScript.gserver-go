@@ -6010,10 +6010,10 @@ func (sl *ServerList) connectServer() bool {
 	// Packet 4: SVO_SERVERHQLEVEL
 	buf = NewBuffer()
 	if sl.server.settings.GetBool("onlystaff", false) {
-		buf.WriteGChar(SVO_SERVERHQLEVEL).WriteByte(0)
+		buf.WriteGChar(SVO_SERVERHQLEVEL).WriteGChar(0)
 	} else {
 		hqLevel := sl.server.adminSettings.GetInt("hq_level", 1)
-		buf.WriteGChar(SVO_SERVERHQLEVEL).WriteByte(byte(hqLevel))
+		buf.WriteGChar(SVO_SERVERHQLEVEL).WriteGChar(byte(hqLevel))
 	}
 	sl.sendPacket(buf.Bytes())
 	// Packet 5: SVO_SENDTEXT - send allowed versions config
@@ -6214,18 +6214,22 @@ func (sl *ServerList) sendPlayers() {
 			buf.WriteGShort(uint16(player.id))
 			buf.WriteGChar(byte(player.playerType))
 			buf.WriteGChar(PLPROP_ACCOUNTNAME).WriteString8Encoded(player.accountName)
+			nickLen := len(player.character.nickName)
+			sl.server.logger.Info("[LISTSERVER] Nickname: len=%d g_encoded=%d raw=%q", nickLen, nickLen+32, player.character.nickName)
+			sl.server.logger.Info("[LISTSERVER] Buffer before nickname (%d bytes): %v", len(buf.Bytes()), buf.Bytes())
 			buf.WriteGChar(PLPROP_NICKNAME).WriteString8Encoded(player.character.nickName)
+			sl.server.logger.Info("[LISTSERVER] Buffer after nickname (%d bytes): %v", len(buf.Bytes()), buf.Bytes())
 			buf.WriteGChar(PLPROP_CURLEVEL).WriteString8Encoded(player.levelName)
 			buf.WriteGChar(PLPROP_X).WriteGString(strconv.Itoa(int(player.x)))
 			buf.WriteGChar(PLPROP_Y).WriteGString(strconv.Itoa(int(player.y)))
 			buf.WriteGChar(PLPROP_ALIGNMENT).WriteGString(strconv.Itoa(player.alignment))
 			buf.WriteGChar(PLPROP_IPADDR).WriteGString(player.accountIpStr)
 			packetBytes := buf.Bytes()
-			hexOut := ""
-			for i, b := range packetBytes {
-				if i < 50 { hexOut += fmt.Sprintf("%02X ", b) } else { hexOut += "..."; break }
+			var hexStr string
+			for _, b := range packetBytes {
+				hexStr += fmt.Sprintf("%02X ", b)
 			}
-			sl.server.logger.Debug("[LISTSERVER] SVO_PLYRADD packet bytes: %s", hexOut)
+			sl.server.logger.Info("[LISTSERVER] PLYRADD packet (%d bytes): %s", len(packetBytes), hexStr)
 			sl.sendPacket(packetBytes)
 		}
 	}
@@ -6237,13 +6241,19 @@ func (sl *ServerList) AddPlayer(player *Player) {
 	buf.WriteGShort(uint16(player.id))
 	buf.WriteGChar(byte(player.playerType))
 	buf.WriteGChar(PLPROP_ACCOUNTNAME).WriteString8Encoded(player.accountName)
+	nickLen := len(player.character.nickName)
+	sl.server.logger.Info("[LISTSERVER] Nickname: len=%d g_encoded_len=%d raw=%q bytes=%d", nickLen, nickLen+32, player.character.nickName, len(player.character.nickName))
+	sl.server.logger.Info("[LISTSERVER] Buffer before nickname (%d bytes): %v", len(buf.Bytes()), buf.Bytes())
 	buf.WriteGChar(PLPROP_NICKNAME).WriteString8Encoded(player.character.nickName)
+	sl.server.logger.Info("[LISTSERVER] Buffer after nickname (%d bytes): %v", len(buf.Bytes()), buf.Bytes())
 	buf.WriteGChar(PLPROP_CURLEVEL).WriteString8Encoded(player.levelName)
 	buf.WriteGChar(PLPROP_X).WriteGString(strconv.Itoa(int(player.x)))
 	buf.WriteGChar(PLPROP_Y).WriteGString(strconv.Itoa(int(player.y)))
 	buf.WriteGChar(PLPROP_ALIGNMENT).WriteGString(strconv.Itoa(player.alignment))
 	buf.WriteGChar(PLPROP_IPADDR).WriteGString(player.accountIpStr)
-	sl.SendPacket(buf.Bytes())
+	packetBytes := buf.Bytes()
+	sl.server.logger.Info("[LISTSERVER] PLYRADD packet (%d bytes): %v", len(packetBytes), packetBytes)
+	sl.SendPacket(packetBytes)
 }
 func (sl *ServerList) DeletePlayer(player *Player) {
 	if !sl.connected { return }

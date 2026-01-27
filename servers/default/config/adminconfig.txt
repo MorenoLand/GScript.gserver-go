@@ -8,7 +8,7 @@ hq_password =
 # 2 = Silver
 # 1 = Bronze
 # 0 = Hidden
-hq_level = 1
+hq_level = 3
 
 # NPC-Server address (to send to RC's, should be same as gserver)
 ns_ip = 127.0.0.1

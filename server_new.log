@@ -1,0 +1,190 @@
+OpenGraal GS2Emu
+3.0.9-GO
+
+Programmed by Terry A. Davis.
+
+[05:20 PM] OpenGraal GS2Emu
+3.0.9-GO
+
+Programmed by Terry A. Davis.
+[05:20 PM] :: Determining the server to start... 
+[05:20 PM] success! (directory search)
+[05:20 PM] :: Starting server: default.
+[05:20 PM] :: Initializing player listen socket.
+[05:20 PM] :: Loading server configuration...
+[05:20 PM]      Loading settings...
+[05:20 PM]      Loading admin settings...
+[05:20 PM]      Loading allowed client versions...
+[05:20 PM]      Folder config: 
+[05:20 PM] ENABLED
+[05:20 PM]      Loading file system...
+[05:20 PM]         adding world/heads/ [*] to head
+[05:20 PM]         adding world/bodies/ [*.png] to body
+[05:20 PM]         adding world/swords/ [*] to sword
+[05:20 PM]         adding world/shields/ [*] to shield
+[05:20 PM]         adding world/ganis/ [*.gani] to file
+[05:20 PM]         adding world/hats/ [*.png] to file
+[05:20 PM]         adding world/images/ [*.png] to file
+[05:20 PM]         adding world/images/ [*.gif] to file
+[05:20 PM]         adding world/images/ [*.mng] to file
+[05:20 PM]         adding world/sounds/ [*.mid] to file
+[05:20 PM]         adding world/sounds/ [*.mp3] to file
+[05:20 PM]         adding world/sounds/ [*.wav] to file
+[05:20 PM]         adding world/levels/ [*.gmap] to file
+[05:20 PM]         adding world/levels/ [*.nw] to level
+[05:20 PM]         adding world/levels/ [*.graal] to level
+[05:20 PM]         adding world/levels/ [*.gmap] to level
+[05:20 PM]         adding world/global/ [*] to file
+[05:20 PM]         adding world/global/heads/ [*] to head
+[05:20 PM]         adding world/global/bodies/ [*.png] to body
+[05:20 PM]         adding world/global/swords/ [*] to sword
+[05:20 PM]         adding world/global/shields/ [*] to shield
+[05:20 PM]      Loading serverflags.txt...
+[05:20 PM]      Loading config/servermessage.html...
+[05:20 PM]      Loading config/ipbans.txt...
+[05:20 PM]      Loading weapons...
+[05:20 PM]      Loading classes...
+[05:20 PM]      Loading maps...
+[05:20 PM]      Loading npcs...
+[05:20 PM]      Loading translations...
+[05:20 PM]      Loading word filter...
+[05:20 PM] [INFO] NPC-Server initialized (id=1 account=(npcserver) nickname=NPC-Server (Server) type=4 x=60 y=61)
+[05:20 PM] :: Started server default (Orion)
+[05:20 PM] :: Press CTRL+C to close the program.  DO NOT CLICK THE X, you will LOSE data!
+[05:20 PM] [INFO] Server started
+[05:20 PM] :: Initializing listserver socket.
+[05:20 PM] :: listserver - Connected.
+[05:20 PM] [DEBUG] [LISTSERVER] GEN_1 Sending 11 bytes:  [62] 33 2E 30 2E 39 2D 47 4F 00 0A 
+[05:20 PM] [DEBUG] [LISTSERVER] GEN_2 Sending 17 bytes (compressed from 3):  [00] 0F 78 9C 32 67 E0 02 04 00 00 FF FF 00 B2 00 42 
+[05:20 PM] [DEBUG] [LISTSERVER] NEWSERVER packet: name=5 desc=15 lang=7 ver=8 url=38 ip=4 port=5 localip=13
+[05:20 PM] [DEBUG] [LISTSERVER] NEWSERVER data: 36 25 4F 72 69 6F 6E 2F 47 6F 20 43 6F 64 65 20 47 53 65 72 76 65 72 27 45 6E 67 6C 69 73 
+[05:20 PM] [DEBUG] [LISTSERVER] GEN_2 Sending 116 bytes (compressed from 105):  [00] 72 78 9C 32 53 F5 2F CA CC CF D3 77 CF 57 70 CE 4F 49 55 70 0F ...
+[05:20 PM] [DEBUG] [LISTSERVER] GEN_2 Sending 17 bytes (compressed from 3):  [00] 0F 78 9C B2 60 E6 02 04 00 00 FF FF 00 BB 00 46 
+[05:20 PM] [DEBUG] [LISTSERVER] GEN_2 Sending 53 bytes (compressed from 39):  [00] 33 78 9C B2 57 F1 C9 2C 2E 29 4E 2D 2A 4B 2D D2 29 4E 2D 29 C9 ...
+[05:20 PM] [DEBUG] [LISTSERVER] GEN_2 Sending 16 bytes (compressed from 2):  [00] 0E 78 9C 52 E7 02 04 00 00 FF FF 00 5A 00 32 
+[05:20 PM] [DEBUG] [LISTSERVER] Sending player to listserver: id=1 type=4 account=(npcserver) nickname=NPC-Server (Server) level= x=60 y=61
+[05:20 PM] [INFO] [LISTSERVER] Nickname encoding: len=19 g_encoded=51 raw="NPC-Server (Server)" bytes=[78 80 67 45 83 101 114 118 101 114 32 40 83 101 114 118 101 114 41]
+[05:20 PM] [DEBUG] [LISTSERVER] GEN_2 Sending 67 bytes (compressed from 63):  [00] 41 78 9C D2 53 50 54 71 D2 D6 C8 2B 48 2E 4E 2D 2A 4B 2D D2 54 ...
+[05:20 PM] [DEBUG] One minute timer
+[05:20 PM] [INFO] Five minute timer - saving data
+[05:20 PM] [DEBUG] [LISTSERVER] Received 276 raw bytes
+[05:20 PM] [DEBUG] [LISTSERVER] processListData: 276 bytes in buffer
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 48, have 276
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 40 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 20: 38 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 57, have 226
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 55 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 20: 53 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 57, have 167
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 55 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 20: 53 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 59, have 108
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 57 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 20: 55 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 45, have 47
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 42 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 20: 40 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received 215 raw bytes
+[05:20 PM] [DEBUG] [LISTSERVER] processListData: 215 bytes in buffer
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 71, have 215
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 69 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 20: 67 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 70, have 142
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 68 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 20: 66 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 68, have 70
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 66 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 20: 64 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received 47 raw bytes
+[05:20 PM] [DEBUG] [LISTSERVER] processListData: 47 bytes in buffer
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 45, have 47
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 42 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 20: 40 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received 64 raw bytes
+[05:20 PM] [DEBUG] [LISTSERVER] processListData: 64 bytes in buffer
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 62, have 64
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 60 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 20: 58 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received 152 raw bytes
+[05:20 PM] [DEBUG] [LISTSERVER] processListData: 152 bytes in buffer
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 52, have 152
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 49 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 20: 47 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 47, have 98
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 44 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 20: 42 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 47, have 49
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 44 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 20: 42 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:20 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:20 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:20 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:20 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:20 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:20 PM] [DEBUG] [LISTSERVER] Received 12 raw bytes
+[05:20 PM] [DEBUG] [LISTSERVER] processListData: 12 bytes in buffer
+[05:20 PM] [DEBUG] [LISTSERVER] Packet length: 10, have 12
+[05:20 PM] [DEBUG] [LISTSERVER] Decompressed to 2 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Received packet 99: 0 bytes
+[05:20 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:20 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:20 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:21 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:21 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:21 PM] [DEBUG] One minute timer
+[05:21 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:21 PM] [DEBUG] [LISTSERVER] Received 12 raw bytes
+[05:21 PM] [DEBUG] [LISTSERVER] processListData: 12 bytes in buffer
+[05:21 PM] [DEBUG] [LISTSERVER] Packet length: 10, have 12
+[05:21 PM] [DEBUG] [LISTSERVER] Decompressed to 2 bytes
+[05:21 PM] [DEBUG] [LISTSERVER] Received packet 99: 0 bytes
+[05:21 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:21 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:21 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:21 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:21 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:21 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:21 PM] [DEBUG] [LISTSERVER] Received 12 raw bytes
+[05:21 PM] [DEBUG] [LISTSERVER] processListData: 12 bytes in buffer
+[05:21 PM] [DEBUG] [LISTSERVER] Packet length: 10, have 12
+[05:21 PM] [DEBUG] [LISTSERVER] Decompressed to 2 bytes
+[05:21 PM] [DEBUG] [LISTSERVER] Received packet 99: 0 bytes
+[05:21 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:21 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:21 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:22 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:22 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:22 PM] [DEBUG] One minute timer
+[05:22 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:22 PM] [DEBUG] [LISTSERVER] Received 12 raw bytes
+[05:22 PM] [DEBUG] [LISTSERVER] processListData: 12 bytes in buffer
+[05:22 PM] [DEBUG] [LISTSERVER] Packet length: 10, have 12
+[05:22 PM] [DEBUG] [LISTSERVER] Decompressed to 2 bytes
+[05:22 PM] [DEBUG] [LISTSERVER] Received packet 99: 0 bytes
+[05:22 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:22 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:22 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:22 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:22 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:22 PM] [DEBUG] [LISTSERVER] Received 12 raw bytes
+[05:22 PM] [DEBUG] [LISTSERVER] processListData: 12 bytes in buffer
+[05:22 PM] [DEBUG] [LISTSERVER] Packet length: 10, have 12
+[05:22 PM] [DEBUG] [LISTSERVER] Decompressed to 2 bytes
+[05:22 PM] [DEBUG] [LISTSERVER] Received packet 99: 0 bytes
+[05:22 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:22 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:22 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:23 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:23 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:23 PM] [DEBUG] One minute timer
+[05:23 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:23 PM] [DEBUG] [LISTSERVER] Received 12 raw bytes
+[05:23 PM] [DEBUG] [LISTSERVER] processListData: 12 bytes in buffer
+[05:23 PM] [DEBUG] [LISTSERVER] Packet length: 10, have 12
+[05:23 PM] [DEBUG] [LISTSERVER] Decompressed to 2 bytes
+[05:23 PM] [DEBUG] [LISTSERVER] Received packet 99: 0 bytes
+[05:23 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:23 PM] [DEBUG] [LISTSERVER] Read timeout
+[05:23 PM] [DEBUG] [LISTSERVER] Read timeout
+exit status 1
