@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/zlib"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"math/rand"
 	"net"
@@ -111,6 +112,7 @@ func (s *Server) initNPCServer() {
 	s.playerMu.Lock()
 	s.players[p.id] = p
 	s.playerMu.Unlock()
+	s.serverList.AddPlayer(p)
 	s.logger.Info("NPC-Server initialized (id=%d account=%s nickname=%s type=%d x=%d y=%d)", p.id, p.accountName, p.character.nickName, p.playerType, int(p.x), int(p.y))
 }
 
@@ -4553,11 +4555,72 @@ func (p *Player) msgPLI_SENDTEXT(packet []byte) bool {
 	return true
 }
 func (p *Player) msgPLI_UPDATEGANI(packet []byte) bool {
-	p.server.logger.Debug("UPDATEGANI")
+	buf := NewBufferFromBytes(packet)
+	checksum := buf.ReadGInt()
+	ganiName := buf.ReadString()
+	ganiFile := ganiName + ".gani"
+	p.server.logger.Debug("UPDATEGANI: %s (checksum: %d)", ganiFile, checksum)
+	ganiData, err := p.server.config.LoadFile(ganiFile)
+	if err != nil {
+		p.server.logger.Debug("Gani file not found: %s", ganiFile)
+		return true
+	}
+	ganiStr := string(ganiData)
+	setBackTo := "idle"
+	if strings.Contains(ganiStr, "SETBACKTO") {
+		lines := strings.Split(ganiStr, "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(line, "SETBACKTO") {
+				parts := strings.Fields(line)
+				if len(parts) >= 2 {
+					setBackTo = parts[1]
+				}
+				break
+			}
+		}
+	}
+	hasScript := strings.Contains(ganiStr, "SCRIPT")
+	if checksum != crc32.ChecksumIEEE(ganiData) {
+		if hasScript {
+			scriptStart := strings.Index(ganiStr, "SCRIPT")
+			scriptEnd := strings.Index(ganiStr, "SCRIPTEND")
+			if scriptStart != -1 && scriptEnd != -1 {
+				scriptCode := ganiStr[scriptStart+7:scriptEnd]
+				p.server.logger.Debug("Sending gani script for %s", ganiFile)
+				outBuf := NewBuffer()
+				outBuf.WriteByte(PLO_RAWDATA)
+				outBuf.WriteGInt(uint32(len(scriptCode)) + 1)
+				outBuf.WriteByte('\n')
+				outBuf.WriteByte(PLO_NPCWEAPONSCRIPT)
+				outBuf.WriteString8(scriptCode)
+				p.send(outBuf)
+			}
+		}
+	}
+	outBuf2 := NewBuffer()
+	outBuf2.WriteByte(PLO_UNKNOWN195)
+	outBuf2.WriteGByte(uint8(len(ganiName)))
+	outBuf2.data = append(outBuf2.data, ganiName...)
+	outBuf2.WriteString8("\"SETBACKTO " + setBackTo + "\"")
+	p.send(outBuf2)
 	return true
 }
 func (p *Player) msgPLI_UPDATESCRIPT(packet []byte) bool {
-	p.server.logger.Debug("UPDATESCRIPT")
+	buf := NewBufferFromBytes(packet[1:])
+	weaponName := buf.ReadString()
+	p.server.logger.Debug("UPDATESCRIPT: %s", weaponName)
+	p.server.weaponMu.RLock()
+	weaponObj, exists := p.server.weapons[weaponName]
+	p.server.weaponMu.RUnlock()
+	if exists && len(weaponObj.bytecode) > 0 {
+		outBuf := NewBuffer()
+		outBuf.WriteByte(PLO_RAWDATA)
+		outBuf.WriteInt(int32(len(weaponObj.bytecode)) + 1)
+		outBuf.WriteByte('\n')
+		outBuf.WriteByte(PLO_NPCWEAPONSCRIPT)
+		outBuf.Write(weaponObj.bytecode)
+		p.send(outBuf)
+	}
 	return true
 }
 func (p *Player) msgPLI_UPDATEPACKAGEREQUESTFILE(packet []byte) bool {

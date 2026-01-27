@@ -1,9 +1,9 @@
 {
-  "overall_progress": "69%",
-  "files_converted": "31/44 (converting remaining 13 files blocked by V8)",
-  "last_updated": "2026-01-19 Session 6",
-  "source": "C:\\Users\\timw\\Desktop\\SESSION01\\GServer-v2",
-  "target": "C:\\Users\\timw\\Desktop\\SESSION01\\gserver-go",
+  "overall_progress": "50%",
+  "files_converted": "18/37 core files (partial), no V8/RC/Client testing yet",
+  "last_updated": "2026-01-27 Session 7",
+  "source": "G:\\Development\\Working\\SESSION04\\GServer-v2",
+  "target": "G:\\Development\\Working\\SESSION04\\gserver-go",
   "core_files": {
     "main.cpp": {"go_file": "main.go", "status": "complete", "percent": 100, "notes": "Server initialization, config loading"},
     "Server.cpp": {"go_file": "gserver.go", "status": "complete", "percent": 100, "notes": "Server struct, player management"},
@@ -142,48 +142,51 @@
     "Server not on public listserver - FIXED (2025-01-19)",
     "Server type showing Graal3D - FIXED",
     "Player count not showing on listserver - FIXED",
-    "NPC script integration - pending",
-    "Weapon system full implementation - pending",
-    "File transfer system - pending",
-    "GS2/GS5 scripting with V8 - pending"
+    "NPCServer not showing account/nickname on listserver - FIXED (2026-01-27)",
+    "Animation system (PLI_UPDATEGANI) - COMPLETE (2026-01-27)",
+    "Weapon bytecode (PLI_UPDATESCRIPT) - COMPLETE (2026-01-27)",
+    "NPC script integration - pending (V8 paused)",
+    "Weapon AI scripting - pending (V8 paused)",
+    "File transfer system - complete"
   ],
   "testing_status": {
-    "last_tested": "2026-01-19",
+    "last_tested": "2026-01-27",
     "networking": {"status": "working", "verified": true, "notes": "TCP connections accepted, GEN encryption working"},
-    "login_system": {"status": "partial", "verified": true, "notes": "Account loading works, pre-warp packets sent, .nw and .zelda parsing implemented, needs client testing"},
-    "gameplay": {"status": "unverified", "verified": false, "notes": ".nw and .zelda parsers implemented (BOARD/CHEST/SIGN/LINK/BADDY/NPC), needs testing with actual client to verify game world entry"},
-    "rc_admin": {"status": "untested", "verified": false, "notes": "27 RC packet handlers implemented but not tested with actual RC client"},
-    "listserver": {"status": "partial", "verified": true, "notes": "Registration works, heartbeat packets sent"},
-    "level_loading": {"status": "implemented", "verified": true, "notes": ".nw parser with base64 tile decoding, .zelda parser with RLE bitstream (12/13-bit), both parse links, baddies, signs"},
-    "critical_blocker": "V8 Scripting Integration - server-side GS2/GS5 execution needed for NPC AI, weapon behaviors, and full gameplay interactivity"
+    "login_system": {"status": "partial", "verified": false, "notes": "Account loading implemented, needs actual client testing"},
+    "gameplay": {"status": "unverified", "verified": false, "notes": "Level parsers complete, no client/RC connection verified yet"},
+    "rc_admin": {"status": "untested", "verified": false, "notes": "27 RC packet handlers implemented, not tested with RC client"},
+    "listserver": {"status": "partial", "verified": true, "notes": "Registration works, NPCServer missing from listserver (fix identified)"},
+    "level_loading": {"status": "implemented", "verified": false, "notes": ".nw and .zelda parsers complete, needs client testing"}
   },
   "next_priorities": [
-    "Test client connection with actual .nw and .zelda level files",
-    "V8 integration for server-side GS2/GS5 scripting (MAJOR BLOCKER)",
-    "GS2 compiler implementation for server-side script compilation",
-    "NPC AI and behaviors with script execution (blocked by V8)",
-    "Weapon script execution (blocked by V8)",
-    "File transfer system",
-    "Player script execution (blocked by V8)",
-    "Animation system with GS2 scripts (blocked by V8)"
+    "Run server: go run *.go",
+    "Verify NPCServer shows on listserver with account/nickname (FIX APPLIED)",
+    "Test RC client connection and basic commands",
+    "Test game client login flow",
+    "Verify level loading (.nw/.zelda) with actual client",
+    "Basic NPC functionality (PUTNPC works, AI needs V8)",
+    "Weapon system (default weapons work, scripted weapons need V8)"
   ],
   "blockers": {
+    "critical_issues": [
+      {
+        "issue": "NPCServer not showing on listserver with proper account/nickname",
+        "status": "identified",
+        "fix_required": "Call serverList.AddPlayer(npcServer) after initNPCServer()",
+        "c++_reference": "Server.cpp:171 - addPlayer(m_npcServer)",
+        "go_location": "gserver.go:114 - after player initialization"
+      }
+    ],
     "v8_scripting": {
-      "status": "not_implemented",
-      "description": "V8 JavaScript engine integration needed for server-side GS2/GS5 script execution",
+      "status": "paused/indefinite",
+      "description": "V8 JavaScript engine integration - PAUSED, may revisit months later",
       "files_blocked": [
-        "Weapon.cpp (332 lines) - Weapon script loading and execution",
-        "NPC.cpp (1936 lines) - NPC AI and script behaviors",
-        "PlayerScripts.cpp (89 lines) - Player script handlers",
-        "GameAni.cpp (109 lines) - Animation scripts",
-        "All scripting/* files - V8 bindings and script engine"
+        "Weapon.cpp - Weapon script loading and execution",
+        "NPC.cpp - NPC AI and script behaviors",
+        "PlayerScripts.cpp - Player script handlers",
+        "All scripting/v8/* files - V8 bindings (16 files)"
       ],
-      "dependencies": [
-        "V8 library integration (CGo or external library)",
-        "GS2 compiler implementation",
-        "Script class system",
-        "Script execution context"
-      ]
+      "note": "Using WASM GS2 compiler instead, V8 is non-blocking"
     },
     "optional_features": {
       "upnp": {
@@ -199,12 +202,70 @@
     "features": ["CRC32 checksum verification", "File send with PLO_FILE packet", "FILEUPTODATE response", "Package file loading (.gupd format)", "File list parsing", "UPDATEPACKAGESIZE notification", "UPDATEPACKAGEDONE completion"]
   },
   "statistics": {
-    "total_cpp_files": 49,
-    "converted": 31,
-    "partially_converted": 11,
-    "not_started": 7,
+    "total_cpp_files": 37,
+    "converted": 19,
+    "partially_converted": 7,
+    "not_started": 11,
     "estimated_cpp_lines": 15000,
-    "estimated_go_lines": 6100,
-    "target_go_lines": "12000-15000"
+    "estimated_go_lines": 7800,
+    "v8_files_paused": 16
+  },
+  "file_inventory": {
+    "core_server": {
+      "main.cpp": {"status": "complete", "go": "main.go", "lines": 50},
+      "Server.cpp": {"status": "complete", "go": "gserver.go", "lines": 800},
+      "ServerList.cpp": {"status": "complete", "go": "gserver.go", "lines": 200},
+      "Account.cpp": {"status": "complete", "go": "gserver.go", "lines": 500},
+      "FileSystem.cpp": {"status": "complete", "go": "config.go", "lines": 300}
+    },
+    "player_system": {
+      "Player.cpp": {"status": "partial", "go": "gserver.go", "percent": 60, "notes": "Core packet handlers done, advanced features missing"},
+      "PlayerLogin.cpp": {"status": "complete", "go": "gserver.go", "lines": 400},
+      "PlayerProps.cpp": {"status": "partial", "go": "gserver.go", "percent": 70, "notes": "83 props, some missing"},
+      "PlayerRC.cpp": {"status": "complete", "go": "gserver.go", "lines": 600, "notes": "27 RC packets"},
+      "PlayerNC.cpp": {"status": "complete", "go": "gserver.go", "lines": 300, "notes": "18 NC packets"},
+      "PlayerExternalPlayers.cpp": {"status": "complete", "go": "gserver.go", "lines": 150},
+      "PlayerRequestText.cpp": {"status": "complete", "go": "gserver.go", "lines": 100},
+      "PlayerUpdatePackages.cpp": {"status": "complete", "go": "gserver.go", "lines": 150},
+      "PlayerScripts.cpp": {"status": "complete", "go": "gserver.go", "lines": 90, "notes": "UPDATEGANI, UPDATESCRIPT, UPDATECLASS implemented"}
+    },
+    "level_system": {
+      "Level.cpp": {"status": "complete", "go": "gserver.go", "lines": 1200, "notes": ".nw and .zelda parsers"},
+      "LevelBaddy.cpp": {"status": "complete", "go": "gserver.go", "lines": 500},
+      "LevelBoardChange.cpp": {"status": "complete", "go": "gserver.go", "lines": 200},
+      "LevelItem.cpp": {"status": "complete", "go": "gserver.go", "lines": 150},
+      "LevelLink.cpp": {"status": "complete", "go": "gserver.go", "lines": 200},
+      "LevelSign.cpp": {"status": "complete", "go": "gserver.go", "lines": 300},
+      "Map.cpp": {"status": "complete", "go": "gserver.go", "lines": 400}
+    },
+    "game_entities": {
+      "NPC.cpp": {"status": "not_started", "blocked": "v8", "lines": 1936, "notes": "Heavy V8 integration"},
+      "Weapon.cpp": {"status": "not_started", "blocked": "v8", "lines": 332, "notes": "Weapon scripting"}
+    },
+    "scripting_system": {
+      "GS2ScriptManager.cpp": {"status": "partial", "go": "not_ported", "percent": 30, "notes": "WASM interface exists, full integration missing"},
+      "ScriptClass.cpp": {"status": "not_started", "blocked": "v8", "lines": 200},
+      "ScriptEngine.cpp": {"status": "not_started", "blocked": "v8", "lines": 500},
+      "v8/V8EnvironmentImpl.cpp": {"status": "paused", "blocked": "v8_indefinite"},
+      "v8/V8FunctionsImpl.cpp": {"status": "paused", "blocked": "v8_indefinite"},
+      "v8/V8LevelChestImpl.cpp": {"status": "paused", "blocked": "v8_indefinite"},
+      "v8/V8LevelImpl.cpp": {"status": "paused", "blocked": "v8_indefinite"},
+      "v8/V8LevelLinkImpl.cpp": {"status": "paused", "blocked": "v8_indefinite"},
+      "v8/V8LevelSignImpl.cpp": {"status": "paused", "blocked": "v8_indefinite"},
+      "v8/V8NPCImpl.cpp": {"status": "paused", "blocked": "v8_indefinite"},
+      "v8/V8PlayerImpl.cpp": {"status": "paused", "blocked": "v8_indefinite"},
+      "v8/V8ScriptEnv.cpp": {"status": "paused", "blocked": "v8_indefinite"},
+      "v8/V8ServerImpl.cpp": {"status": "paused", "blocked": "v8_indefinite"},
+      "v8/V8WeaponImpl.cpp": {"status": "paused", "blocked": "v8_indefinite"}
+    },
+    "utilities": {
+      "FilePermissions.cpp": {"status": "complete", "go": "gserver.go", "lines": 200},
+      "StringUtils.cpp": {"status": "complete", "go": "gserver.go", "lines": 100},
+      "WordFilter.cpp": {"status": "complete", "go": "gserver.go", "lines": 150},
+      "UPNP.cpp": {"status": "not_started", "optional": true, "notes": "UPnP port forwarding"},
+      "UpdatePackage.cpp": {"status": "complete", "go": "gserver.go", "lines": 200},
+      "TriggerCommandHandlers.cpp": {"status": "complete", "go": "gserver.go", "lines": 150},
+      "animation/GameAni.cpp": {"status": "complete", "go": "gserver.go", "notes": "PLI_UPDATEGANI loads .gani files, sends embedded scripts"}
+    }
   }
 }

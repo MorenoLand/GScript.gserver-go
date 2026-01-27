@@ -41,7 +41,7 @@ staffguilds = Server,Manager,Owner,Admin,FAQ,LAT,NAT,GAT,GP,GP Chief,Bugs Admin,
 
 # Accounts which are recognized by the server as staff.  To be allowed access to RC, your account must be here.
 # (Manager) and the like are just placeholders to organize the list.  They are not guilds.
-staff = (Manager),YOURACCOUNT
+staff = (Manager),moondeath
 
 # Enables/disables item dropping from various sources.
 # bushitems also affects certain tiles other than bushes.
