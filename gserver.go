@@ -1094,7 +1094,11 @@ func (p *Player) CanRecv() bool    { return true }
 func (p *Player) CanSend() bool    { return len(p.recvBuffer) > 0 }
 
 func (p *Player) OnRecv() bool {
-	p.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if !p.isLoggedIn() {
+		p.conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	} else {
+		p.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	}
 	buf := make([]byte, 4096)
 	n, err := p.conn.Read(buf)
 	if err != nil {
