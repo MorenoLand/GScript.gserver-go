@@ -77,6 +77,28 @@
     }
   },
   "recent_changes": {
+    "date": "2026-01-28 Session 8 - Packet name maps added for debugging",
+    "packet_name_maps": {
+      "status": "complete",
+      "changes": [
+        "Added pliNames map for all Player-To-Server packet IDs (0-162)",
+        "Added ploNames map for all Server-To-Player packet IDs (0-198)",
+        "Updated handlePacket() to show packet names instead of IDs in logs",
+        "Updated sendPacket() to show packet names for outgoing packets",
+        "All packet logging now uses human-readable names (e.g., 'PLI_BOARDMODIFY' instead of 'packet ID 1')"
+      ],
+      "source": "iEnums.h from gs2lib",
+      "notes": "Makes debugging way easier - you can now see actual packet names in logs instead of mystery numbers"
+    },
+    "login_flow_fix": {
+      "status": "complete",
+      "fixes": [
+        "Removed premature sendCompress() call before prop exchange",
+        "Removed entire prop exchange block during login (C++ doesn't do this)",
+        "sendCompress() now only called once at very end of handleLogin(), matching C++ behavior"
+      ],
+      "c++_reference": "PlayerLogin.cpp:387 - m_fileQueue.sendCompress(true) at end of sendLogin()"
+    },
     "date": "2025-01-19 Session 6 continued - WriteGShort/WriteGInt encoding fixed",
     "encoding_fixes": {
       "status": "complete",
@@ -137,7 +159,14 @@
     }
   },
   "known_issues": [
-    "Client stuck at loading account - FIXED (2025-01-19)",
+    "Client stuck at loading account - IN PROGRESS (2026-01-28)",
+    "  - Fixed premature sendCompress() call during login",
+    "  - Removed incorrect prop exchange block during login",
+    "  - Added packet name maps for better debugging",
+    "  - Fixed 10ms read deadline in OnRecv() - was too short for client to send data",
+    "  - Added nil checks for pl.conn in all player iteration loops",
+    "  - Server logs successful login, sends all packets, but client still stuck",
+    "  - Next: Restart server and test with read deadline fix",
     "NPCServer listserver data corruption - FIXED (2025-01-19)",
     "Server not on public listserver - FIXED (2025-01-19)",
     "Server type showing Graal3D - FIXED",
@@ -159,7 +188,17 @@
     "level_loading": {"status": "implemented", "verified": false, "notes": ".nw and .zelda parsers complete, needs client testing"}
   },
   "next_priorities": [
-    "Run server: go run *.go",
+    "**IMPORTANT GRAAL PROTOCOL FLOW (MEMORIZE THIS)**",
+    "1. Client starts -> shows login form (enter account/password)",
+    "2. Client connects to listserver -> gets server list",
+    "3. User selects server -> client connects to gserver",
+    "4. Client sends PLI_LOGIN packet with account/password",
+    "5. GServer authenticates and logs player in",
+    "",
+    "**IF SOMETHING DOESN'T WORK: It's ONLY the Go gserver code.**",
+    "Listserver, API, and client are all working correctly.",
+    "",
+    "Run server: go run *.go (NEVER build .exe)",
     "Verify NPCServer shows on listserver with account/nickname (FIX APPLIED)",
     "Test RC client connection and basic commands",
     "Test game client login flow",

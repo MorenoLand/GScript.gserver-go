@@ -410,6 +410,7 @@ func (s *Server) AddPlayer(player *Player, id uint16) bool {
 	player.setId(id)
 	s.players[id] = player
 	s.logger.Info("Player %d added (account: %s)", id, player.getAccountName())
+	s.serverList.AddPlayer(player)
 	return true
 }
 
@@ -1093,7 +1094,7 @@ func (p *Player) CanRecv() bool    { return true }
 func (p *Player) CanSend() bool    { return len(p.recvBuffer) > 0 }
 
 func (p *Player) OnRecv() bool {
-	p.conn.SetReadDeadline(time.Now().Add(10 * time.Millisecond))
+	p.conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	buf := make([]byte, 4096)
 	n, err := p.conn.Read(buf)
 	if err != nil {
@@ -1134,6 +1135,11 @@ func (p *Player) handlePacket(packet []byte) bool {
 	}
 	packetId := int(packet[0])
 	p.packetCount++
+	packetName := pliNames[byte(packetId)]
+	if packetName == "" {
+		packetName = fmt.Sprintf("UNKNOWN_%d", packetId)
+	}
+	p.server.logger.Debug("[PACKET] Received %s (ID %d, %d bytes) from %s", packetName, packetId, len(packet), p.accountName)
 	switch packetId {
 	case PLI_LEVELWARP, PLI_LEVELWARPMOD:
 		return p.msgPLI_LEVELWARP(packet)
@@ -1604,8 +1610,21 @@ func (p *Player) handleLogin(packet []byte) bool {
 			p.sendPacket(buf.Bytes())
 		}
 	}
-	p.sendCompress(true)
-	for _, pl := range p.server.players { if pl.isLoggedIn() && pl != p { p.sendPLO_ADDPLAYER(pl) } }
+	p.server.logger.Info("Exchanging player props with existing players...")
+	p.server.playerMu.RLock()
+	for _, other := range p.server.players {
+		if other == nil { continue }
+		if other.id == p.id { continue }
+		if other.playerType&PLTYPE_NC != 0 { continue }
+		if other.conn == nil { continue }
+		myProps := p.sendPropsWithArray(getLoginProps)
+		if len(myProps) == 0 { continue }
+		other.sendPacket(myProps)
+		otherProps := other.sendPropsWithArray(getLoginProps)
+		if len(otherProps) == 0 { continue }
+		p.sendPacket(otherProps)
+	}
+	p.server.playerMu.RUnlock()
 	p.sendCompress(true)
 	p.server.logger.Info("[%s] Player logged in (type=%d)", account, clientType)
 	return true
@@ -1637,9 +1656,18 @@ func (p *Player) handleRawData(data []byte) {
 func (p *Player) sendPacket(packet []byte) {
 	if len(packet) == 0 { return }
 	var data []byte
+	packetId := byte(0)
+	if len(packet) > 0 {
+		packetId = packet[0]
+	}
+	packetName := ploNames[packetId]
+	if packetName == "" {
+		packetName = "UNKNOWN"
+	}
+	p.server.logger.Debug("sendPacket: RAW %s (ID %d): % X", packetName, packetId, packet)
 	switch p.encryption.gen {
 	case ENCRYPT_GEN_1:
-		p.server.logger.Debug("sendPacket: GEN_1, sending raw %d bytes", len(packet))
+		p.server.logger.Debug("sendPacket: GEN_1, sending %s (ID %d), raw %d bytes", packetName, packetId, len(packet))
 		data = packet
 	case ENCRYPT_GEN_2, ENCRYPT_GEN_3:
 		compressed, err := ZlibCompress(packet)
@@ -1651,7 +1679,7 @@ func (p *Player) sendPacket(packet []byte) {
 			p.server.logger.Error("sendPacket: compressed packet too large (%d bytes)", len(compressed))
 			return
 		}
-		p.server.logger.Debug("sendPacket: GEN_%d, compressed %d -> %d bytes", p.encryption.gen, len(packet), len(compressed))
+		p.server.logger.Debug("sendPacket: GEN_%d, sending %s (ID %d), compressed %d -> %d bytes", p.encryption.gen, packetName, packetId, len(packet), len(compressed))
 		data = make([]byte, 2+len(compressed))
 		data[0] = byte(len(compressed) >> 8)
 		data[1] = byte(len(compressed))
@@ -1681,7 +1709,7 @@ func (p *Player) sendPacket(packet []byte) {
 		// Build packet: [length_lo][length_hi][compression_type][encrypted...]
 		totalLen := 2 + 1 + len(encrypted)
 		if totalLen > 0xFFFE {
-			p.server.logger.Error("sendPacket: GEN_5 packet too large (%d bytes)", totalLen)
+			p.server.logger.Error("sendPacket: GEN_5 packet too large (%s ID %d, %d bytes)", packetName, packetId, totalLen)
 			return
 		}
 		data = make([]byte, totalLen)
@@ -1689,9 +1717,9 @@ func (p *Player) sendPacket(packet []byte) {
 		data[1] = byte(totalLen >> 8)
 		data[2] = compressionType
 		copy(data[3:], encrypted)
-		p.server.logger.Debug("sendPacket: GEN_5, original %d bytes, compressed %d bytes, compression_type=%d", len(packet), len(compressed), compressionType)
+		p.server.logger.Debug("sendPacket: GEN_5, sending %s (ID %d), original %d bytes, compressed %d bytes, compression_type=%d", packetName, packetId, len(packet), len(compressed), compressionType)
 	default:
-		p.server.logger.Debug("sendPacket: Unknown GEN_%d, sending raw %d bytes", p.encryption.gen, len(packet))
+		p.server.logger.Debug("sendPacket: Unknown GEN_%d, sending %s (ID %d), raw %d bytes", p.encryption.gen, packetName, packetId, len(packet))
 		data = packet
 	}
 	p.server.logger.Debug("sendPacket: Writing %d bytes: % X", len(data), data)
@@ -1706,7 +1734,14 @@ func (p *Player) send(buf *Buffer) {
 	data := append(buf.Bytes(), '\n')
 	p.sendPacket(data)
 }
-func (p *Player) disconnect()              { p.conn.Close(); p.server.DeletePlayer(p) }
+func (p *Player) disconnect() {
+	if p.conn != nil {
+		p.conn.Close()
+	}
+	if p.server != nil {
+		p.server.DeletePlayer(p)
+	}
+}
 func (p *Player) hasRight(perm int) bool    { return p.adminRights&perm != 0 }
 func (p *Player) sendPLO_LEVELBOARD(levelName string, boardData []byte) bool {
 	buf := NewBuffer()
@@ -1805,7 +1840,7 @@ func (p *Player) sendPLO_PLAYERWARP(x, y, z int16, levelName string) bool {
 func (p *Player) sendPTO_ALL_CHAT(message string) bool {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_TOALL).WriteGString(p.character.nickName).WriteGString(message)
-	for _, pl := range p.server.players { if pl.isLoggedIn() && pl.levelName == p.levelName { pl.send(buf) } }
+	for _, pl := range p.server.players { if pl.isLoggedIn() && pl.levelName == p.levelName && pl.conn != nil { pl.send(buf) } }
 	return true
 }
 func (p *Player) sendPLO_PRIVATEMESSAGE(from, message string) bool {
@@ -1958,7 +1993,17 @@ func (p *Player) sendPLO_EXPLOSION(x, y int16, power int) bool {
 func (p *Player) sendPLO_ADDPLAYER(other *Player) bool {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_ADDPLAYER).WriteGShort(other.id)
-	buf.WriteGString(other.character.nickName).WriteGString(other.accountName)
+	// Account name with GChar length prefix
+	buf.WriteGString(other.accountName)
+	// Props embedded in ADDPLAYER for RC
+	levelName := other.levelName
+	if levelName == "" {
+		levelName = " "
+	}
+	buf.WriteGChar(PLPROP_CURLEVEL).WriteGString(levelName)
+	buf.WriteGChar(PLPROP_PSTATUSMSG).WriteGString(other.statusMsg)
+	buf.WriteGChar(PLPROP_NICKNAME).WriteGString(other.character.nickName)
+	buf.WriteGChar(PLPROP_COMMUNITYNAME).WriteGString(other.communityName)
 	p.send(buf)
 	return true
 }
@@ -2282,7 +2327,7 @@ func (p *Player) msgPLI_BOARDMODIFY(packet []byte) bool {
 	if level, ok := p.server.levels[p.levelName]; ok {
 		change := LevelBoardChange{x: int(x), y: int(y), width: int(width), height: int(height), newTiles: shortsToBytes(tiles), time: time.Now()}
 		level.boardChanges = append(level.boardChanges, change)
-		for _, plId := range level.players { if pl, ok := p.server.players[plId]; ok { pl.sendPBoardPacket(int16(x), int16(y), int16(width), int16(height), tiles) } }
+		for _, plId := range level.players { if pl, ok := p.server.players[plId]; ok && pl.conn != nil { pl.sendPBoardPacket(int16(x), int16(y), int16(width), int16(height), tiles) } }
 	}
 	return true
 }
@@ -2415,6 +2460,19 @@ func (p *Player) sendProps(props [PROPCOUNT]bool) {
 	}
 }
 
+// sendPropsWithArray returns properties as byte array without sending
+func (p *Player) sendPropsWithArray(props [PROPCOUNT]bool) []byte {
+	buf := NewBuffer()
+	for propId := 0; propId < PROPCOUNT; propId++ {
+		if props[propId] {
+			buf.WriteGChar(byte(propId))
+			propData := p.getProp(propId)
+			buf.data = append(buf.data, propData...)
+		}
+	}
+	return buf.Bytes()
+}
+
 func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 	buf := NewBufferFromBytes(packet[1:])
 	for buf.BytesLeft() > 0 {
@@ -2436,7 +2494,7 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 		}
 	}
 	p.sendPLO_PLAYERPROPS()
-	for _, pl := range p.server.players { if pl != p && pl.isLoggedIn() && pl.levelName == p.levelName { pl.sendPLO_OTHERPLPROPS(p) } }
+	for _, pl := range p.server.players { if pl != p && pl.isLoggedIn() && pl.levelName == p.levelName && pl.conn != nil { pl.sendPLO_OTHERPLPROPS(p) } }
 	return true
 }
 func (p *Player) msgPLI_NPCPROPS(packet []byte) bool {
@@ -2489,7 +2547,7 @@ func (p *Player) msgPLI_FIRESPY(packet []byte) bool {
 	x := int16(buf.ReadGShort())
 	y := int16(buf.ReadGShort())
 	if level, ok := p.server.levels[p.levelName]; ok {
-		for _, plId := range level.players { if pl, ok := p.server.players[plId]; ok && pl != p { pl.sendPLO_FIRESPY(x, y, p.accountName) } }
+		for _, plId := range level.players { if pl, ok := p.server.players[plId]; ok && pl != p && pl.conn != nil { pl.sendPLO_FIRESPY(x, y, p.accountName) } }
 	}
 	return true
 }
@@ -2498,7 +2556,7 @@ func (p *Player) msgPLI_THROWCARRIED(packet []byte) bool {
 	x := int16(buf.ReadGShort())
 	y := int16(buf.ReadGShort())
 	if level, ok := p.server.levels[p.levelName]; ok {
-		for _, plId := range level.players { if pl, ok := p.server.players[plId]; ok && pl != p { pl.sendPLO_THROWCARRIED(x, y, p.accountName) } }
+		for _, plId := range level.players { if pl, ok := p.server.players[plId]; ok && pl != p && pl.conn != nil { pl.sendPLO_THROWCARRIED(x, y, p.accountName) } }
 	}
 	return true
 }
@@ -2529,7 +2587,7 @@ func (p *Player) msgPLI_BADDYPROPS(packet []byte) bool {
 	props := []string{}
 	for buf.Remaining() > 0 { props = append(props, buf.ReadGString()) }
 	if level, ok := p.server.levels[p.levelName]; ok {
-		for _, plId := range level.players { if pl, ok := p.server.players[plId]; ok { pl.sendPLO_BADDYPROPS(baddyId, 0, 0, "", props) } }
+		for _, plId := range level.players { if pl, ok := p.server.players[plId]; ok && pl.conn != nil { pl.sendPLO_BADDYPROPS(baddyId, 0, 0, "", props) } }
 	}
 	return true
 }
@@ -2538,7 +2596,7 @@ func (p *Player) msgPLI_BADDYHURT(packet []byte) bool {
 	baddyId := buf.ReadGInt()
 	hurtPower := buf.ReadGChar()
 	if level, ok := p.server.levels[p.levelName]; ok {
-		for _, plId := range level.players { if pl, ok := p.server.players[plId]; ok { pl.sendPLO_BADDYHURT(baddyId, int(hurtPower)) } }
+		for _, plId := range level.players { if pl, ok := p.server.players[plId]; ok && pl.conn != nil { pl.sendPLO_BADDYHURT(baddyId, int(hurtPower)) } }
 	}
 	return true
 }
@@ -2549,7 +2607,7 @@ func (p *Player) msgPLI_BADDYADD(packet []byte) bool {
 	baddyType := buf.ReadGChar()
 	if level, ok := p.server.levels[p.levelName]; ok {
 		level.baddies[uint8(len(level.baddies))] = &LevelBaddy{x: x, y: y, baddyType: uint8(baddyType)}
-		for _, plId := range level.players { if pl, ok := p.server.players[plId]; ok { pl.sendPLO_BADDYPROPS(uint32(len(level.baddies)), int16(x), int16(y), "", []string{}) } }
+		for _, plId := range level.players { if pl, ok := p.server.players[plId]; ok && pl.conn != nil { pl.sendPLO_BADDYPROPS(uint32(len(level.baddies)), int16(x), int16(y), "", []string{}) } }
 	}
 	return true
 }
@@ -2647,7 +2705,7 @@ func (p *Player) msgPLI_PRIVATEMESSAGE(packet []byte) bool {
 	buf := NewBufferFromBytes(packet[1:])
 	toNick := buf.ReadGString()
 	msg := buf.ReadGString()
-	for _, pl := range p.server.players { if pl.isLoggedIn() && pl.character.nickName == toNick { pl.sendPLO_PRIVATEMESSAGE(p.character.nickName, msg); break } }
+	for _, pl := range p.server.players { if pl.isLoggedIn() && pl.character.nickName == toNick && pl.conn != nil { pl.sendPLO_PRIVATEMESSAGE(p.character.nickName, msg); break } }
 	return true
 }
 func (p *Player) msgPLI_NPCWEAPONDEL(packet []byte) bool {
