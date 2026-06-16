@@ -1282,7 +1282,7 @@ func containsTerminatedPacket(stream, prefix []byte) bool {
 	return end >= 0
 }
 
-func TestDeletePlayerBroadcastsDelPlayer(t *testing.T) {
+func TestDeletePlayerBroadcastsDisconnectedPropToGameClients(t *testing.T) {
 	server := &Server{
 		logger:  NewLogger("", false),
 		players: make(map[uint16]*Player),
@@ -1302,10 +1302,35 @@ func TestDeletePlayerBroadcastsDelPlayer(t *testing.T) {
 
 	server.DeletePlayer(p)
 
-	want := append([]byte{PLO_DELPLAYER + 32}, NewBuffer().WriteGShort(p.id).Bytes()...)
+	want := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(p.id).Bytes()...)
+	want = append(want, PLPROP_PCONNECTED+32)
 	want = append(want, '\n')
 	if !bytes.Equal(other.outQueue, want) {
-		t.Fatalf("delete player broadcast = % X, want % X", other.outQueue, want)
+		t.Fatalf("delete player client broadcast = % X, want % X", other.outQueue, want)
+	}
+}
+
+func TestDeletePlayerBroadcastsDelPlayerToRC(t *testing.T) {
+	server := &Server{
+		logger:  NewLogger("", false),
+		players: make(map[uint16]*Player),
+	}
+	p := &Player{id: 1, server: server, playerType: PLTYPE_CLIENT3}
+	rc := &Player{id: 2, server: server, playerType: PLTYPE_RC2, queueOutgoing: true}
+	server.players[p.id] = p
+	server.players[rc.id] = rc
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+	rc.conn = serverConn
+
+	server.DeletePlayer(p)
+
+	want := append([]byte{PLO_DELPLAYER + 32}, NewBuffer().WriteGShort(p.id).Bytes()...)
+	want = append(want, '\n')
+	if !bytes.Equal(rc.outQueue, want) {
+		t.Fatalf("delete player rc broadcast = % X, want % X", rc.outQueue, want)
 	}
 }
 
@@ -1360,7 +1385,8 @@ func TestPlayerWriteFailureDisconnectsAndBroadcastsDelPlayer(t *testing.T) {
 	if got := level.getPlayers(); len(got) != 0 {
 		t.Fatalf("dead player still in level players: %v", got)
 	}
-	want := append([]byte{PLO_DELPLAYER + 32}, NewBuffer().WriteGShort(dead.id).Bytes()...)
+	want := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(dead.id).Bytes()...)
+	want = append(want, PLPROP_PCONNECTED+32)
 	want = append(want, '\n')
 	if !bytes.Equal(observer.outQueue, want) {
 		t.Fatalf("observer delplayer = % X, want % X", observer.outQueue, want)

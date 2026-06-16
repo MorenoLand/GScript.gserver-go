@@ -709,7 +709,12 @@ func (s *Server) DeletePlayer(player *Player) {
 		s.serverList.DeletePlayer(player)
 	}
 	for _, other := range remaining {
-		if other != nil && other.conn != nil && other.isLoggedIn() && other.playerType&PLTYPE_ANYCLIENT != 0 {
+		if other == nil || other.conn == nil || !other.isLoggedIn() {
+			continue
+		}
+		if other.playerType&PLTYPE_ANYCLIENT != 0 {
+			other.sendPLO_OTHERPLPROPS_DISCONNECTED(id)
+		} else if other.playerType&PLTYPE_ANYRC != 0 {
 			other.sendPLO_DELPLAYER(id)
 		}
 	}
@@ -3039,6 +3044,14 @@ func (p *Player) sendPLO_DELPLAYER(id uint16) bool {
 	p.send(buf)
 	return true
 }
+
+func (p *Player) sendPLO_OTHERPLPROPS_DISCONNECTED(id uint16) bool {
+	buf := NewBuffer()
+	buf.WriteByte(PLO_OTHERPLPROPS).WriteGShort(id).WriteGChar(PLPROP_PCONNECTED)
+	p.send(buf)
+	return true
+}
+
 func (p *Player) sendPLO_STARTMESSAGE(message string) bool {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_STARTMESSAGE).Write([]byte(message))
