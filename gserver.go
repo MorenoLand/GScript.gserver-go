@@ -670,7 +670,13 @@ func (s *Server) loadFlags() {
 		}
 		parts := splitN(line, '=', 2)
 		if len(parts) == 2 {
-			s.flags[parts[0]] = parts[1]
+			name := trimSpace(parts[0])
+			value := parts[1]
+			if !isValidServerFlag(name, value) {
+				s.logger.Warning("Skipping malformed server flag %q", line)
+				continue
+			}
+			s.flags[name] = value
 		}
 	}
 }
@@ -680,11 +686,22 @@ func (s *Server) saveFlags() {
 	defer s.flagMu.RUnlock()
 	var lines []string
 	for key, value := range s.flags {
+		if !isValidServerFlag(key, value) {
+			s.logger.Warning("Skipping malformed server flag while saving: %q", key)
+			continue
+		}
 		lines = append(lines, fmt.Sprintf("%s=%s", key, value))
 	}
 	if err := s.config.SaveLinesAsFile("config/serverflags.txt", lines); err != nil {
 		s.logger.Error("Could not save serverflags.txt: %v", err)
 	}
+}
+
+func isValidServerFlag(name, value string) bool {
+	if name == "" || strings.ContainsAny(name, "\x00\r\n=") || strings.ContainsAny(value, "\x00\r\n") {
+		return false
+	}
+	return true
 }
 
 func (s *Server) saveData() { s.saveFlags() }
@@ -1868,26 +1885,22 @@ func (p *Player) sendPostLoginTail() {
 		if other.id == p.id {
 			continue
 		}
-		if other.playerType&PLTYPE_ANYCLIENT == 0 {
-			continue
-		}
-		if other.conn == nil {
+		if !isPlayerListPlayer(other) {
 			continue
 		}
 		if !other.isLoggedIn() {
 			continue
 		}
-		if other.playerType&PLTYPE_ANYCLIENT != 0 {
+		if other.conn != nil && isPlayerListPlayer(p) {
 			other.sendPLO_ADDPLAYER(p)
 		}
 		if p.playerType&PLTYPE_ANYCLIENT != 0 {
 			p.sendPLO_ADDPLAYER(other)
 		}
 		myProps := p.sendPropsWithArray(getLoginProps)
-		if len(myProps) == 0 {
-			continue
+		if len(myProps) > 0 && other.conn != nil && isPlayerListPlayer(p) {
+			other.sendPacket(append(p.otherPropsPacket(myProps), '\n'))
 		}
-		other.sendPacket(append(p.otherPropsPacket(myProps), '\n'))
 		otherProps := other.sendPropsWithArray(getLoginProps)
 		if len(otherProps) == 0 {
 			continue
@@ -1912,21 +1925,15 @@ func (p *Player) sendToCurrentLevelExceptSelf(packet []byte) {
 		level = p.server.GetLevel(cleanLevelName(p.levelName))
 	}
 	if level == nil || p.server == nil {
-		p.sendPacket(append(packet, '\n'))
 		return
 	}
-	sent := false
 	for _, plId := range level.getPlayers() {
 		if plId == p.id {
 			continue
 		}
 		if pl, ok := p.server.players[plId]; ok && pl.conn != nil {
 			pl.sendPacket(append(packet, '\n'))
-			sent = true
 		}
-	}
-	if !sent && p.conn != nil {
-		p.sendPacket(append(packet, '\n'))
 	}
 }
 
@@ -2371,6 +2378,11 @@ func (p *Player) handleLogin(packet []byte) bool {
 		p.SaveAccount()
 	}
 	if clientType&PLTYPE_ANYRC != 0 {
+		p.levelName = ""
+		p.currentLevel = nil
+		p.x = 0
+		p.y = 0
+		p.z = 0
 		p.server.logger.Info("Sending RC login payload...")
 		p.sendRCLoginPayload()
 		p.sendCompress(true)
@@ -2401,11 +2413,14 @@ func (p *Player) handleLogin(packet []byte) bool {
 	p.sendPLO_FLAGSET("sprite", fmt.Sprintf("%d", p.character.sprite))
 	p.server.logger.Info("Sending server flags...")
 	for flag, value := range p.server.flags {
+		if !isValidServerFlag(flag, value) {
+			p.server.logger.Warning("Skipping malformed server flag for %s: %q", p.accountName, flag)
+			continue
+		}
 		p.sendPLO_FLAGSET(flag, value)
 	}
-	p.server.logger.Info("Deleting default weapons...")
-	p.sendPLO_NPCWEAPONDEL("Bomb")
-	p.sendPLO_NPCWEAPONDEL("Bow")
+	p.server.logger.Info("Deleting missing default weapons...")
+	p.sendMissingDefaultWeaponDeletes()
 	p.server.logger.Info("Sending weapons...")
 	// TODO: Weapon system not fully implemented yet
 	// for _, weaponName := range p.weaponList {
@@ -3213,6 +3228,15 @@ func (p *Player) sendPLO_NPCWEAPONDEL(weaponName string) bool {
 	return true
 }
 
+func (p *Player) sendMissingDefaultWeaponDeletes() {
+	if !p.hasAccountWeapon("bomb") {
+		p.sendPLO_NPCWEAPONDEL("Bomb")
+	}
+	if !p.hasAccountWeapon("bow") {
+		p.sendPLO_NPCWEAPONDEL("Bow")
+	}
+}
+
 func (p *Player) sendWeapon(weapon *Weapon) bool {
 	if weapon == nil {
 		return false
@@ -3281,6 +3305,9 @@ func (p *Player) sendAccountWeapon(weaponName string) bool {
 		return false
 	}
 	if itemType := getItemId(strings.ToLower(weaponName)); itemType != LevelItemType(-1) {
+		if p.server.settings != nil && !p.server.settings.GetBool("defaultweapons", true) {
+			return false
+		}
 		p.server.logger.Debug("Sending default weapon: %s", weaponName)
 		return p.sendPLO_DEFAULTWEAPON(byte(itemType))
 	}
@@ -3531,6 +3558,20 @@ func (p *Player) addWeapon(weaponName string) {
 		}
 	}
 	p.weaponList = append(p.weaponList, weaponName)
+}
+func (p *Player) hasAccountWeapon(weaponName string) bool {
+	weaponName = strings.ToLower(strings.TrimSpace(weaponName))
+	if weaponName == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, w := range p.weaponList {
+		if strings.ToLower(strings.TrimSpace(w)) == weaponName {
+			return true
+		}
+	}
+	return false
 }
 func (p *Player) hasChest(chestKey string) bool {
 	for _, chest := range p.chestList {
@@ -4942,10 +4983,16 @@ func (p *Player) msgPLI_RC_SERVERFLAGSGET(packet []byte) bool {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_RC_SERVERFLAGSGET)
 	p.server.flagMu.RLock()
-	buf.WriteShort(int16(len(p.server.flags)))
+	validFlags := make(map[string]string)
 	for flag, value := range p.server.flags {
+		if !isValidServerFlag(flag, value) {
+			continue
+		}
+		validFlags[flag] = value
+	}
+	buf.WriteShort(int16(len(validFlags)))
+	for flag, value := range validFlags {
 		flagStr := flag + "=" + value
-		buf.WriteByte(byte(len(flagStr)))
 		buf.WriteString8(flagStr)
 	}
 	p.server.flagMu.RUnlock()
@@ -4978,9 +5025,17 @@ func (p *Player) msgPLI_RC_SERVERFLAGSSET(packet []byte) bool {
 		}
 		flagStr := string(flagBytes)
 		if idx := strings.Index(flagStr, "="); idx != -1 {
-			p.server.flags[flagStr[:idx]] = flagStr[idx+1:]
-		} else {
+			name := trimSpace(flagStr[:idx])
+			value := flagStr[idx+1:]
+			if isValidServerFlag(name, value) {
+				p.server.flags[name] = value
+			} else {
+				p.server.logger.Warning("Ignoring malformed server flag from RC: %q", flagStr)
+			}
+		} else if isValidServerFlag(flagStr, "") {
 			p.server.flags[flagStr] = ""
+		} else {
+			p.server.logger.Warning("Ignoring malformed server flag from RC: %q", flagStr)
 		}
 	}
 	p.server.flagMu.Unlock()
@@ -8667,7 +8722,11 @@ func (sl *ServerList) AddPlayer(player *Player) {
 }
 
 func isListserverPlayer(player *Player) bool {
-	return player != nil && (player.playerType&PLTYPE_ANYCLIENT != 0 || player.playerType == PLTYPE_NPCSERVER)
+	return isPlayerListPlayer(player)
+}
+
+func isPlayerListPlayer(player *Player) bool {
+	return player != nil && player.playerType&PLTYPE_ANYPLAYER != 0
 }
 
 func (sl *ServerList) sendPlayerAdd(player *Player) {

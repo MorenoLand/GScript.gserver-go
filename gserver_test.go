@@ -395,6 +395,46 @@ func TestRCFolderConfigGetUsesFolderConfigPacketAndTokenizedText(t *testing.T) {
 	}
 }
 
+func TestLoadFlagsSkipsMalformedServerFlags(t *testing.T) {
+	server := newLoginTestServer(t)
+	configDir := filepath.Join(server.config.GetBasePath(), "config")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "serverflags.txt"), []byte("good=true\nbad\x00name=true\n=value\nmulti=line\x00junk\n"), 0644); err != nil {
+		t.Fatalf("write serverflags: %v", err)
+	}
+
+	server.loadFlags()
+
+	if got := server.flags["good"]; got != "true" {
+		t.Fatalf("good flag = %q, want true", got)
+	}
+	if len(server.flags) != 1 {
+		t.Fatalf("loaded flags = %#v, want only good flag", server.flags)
+	}
+}
+
+func TestRCServerFlagsGetUsesSingleString8Length(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.flags["test"] = "true"
+	server.flags["bad\x00name"] = "true"
+
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	rc.msgPLI_RC_SERVERFLAGSGET([]byte{PLI_RC_SERVERFLAGSGET})
+
+	want := []byte{PLO_RC_SERVERFLAGSGET + 32, 0, 1, byte(len("test=true"))}
+	want = append(want, []byte("test=true")...)
+	want = append(want, '\n')
+	if !bytes.Equal(rc.outQueue, want) {
+		t.Fatalf("server flags packet = % X, want % X", rc.outQueue, want)
+	}
+}
+
 func TestGTokenizeTextRoundTripsConfigLines(t *testing.T) {
 	input := "name=Orion-Go\nstaff=(Manager),moondeath\npath=levels/*.graal\nquote=a \"quoted\" value\n"
 	tokenized := gtokenizeText(input)
@@ -651,6 +691,29 @@ func TestFileSystemReadMethodsFallBackToWorldFolder(t *testing.T) {
 	}
 	if !fs.FileExists("levels/test.nw") {
 		t.Fatalf("FileExists fallback = false, want true")
+	}
+}
+
+func TestRCLoginClearsWorldLevelFromAccount(t *testing.T) {
+	server := newLoginTestServer(t)
+	account := "" +
+		"GRACC001\n" +
+		"NICK moondeath\n" +
+		"LOCALRIGHTS 1\n" +
+		"LEVEL onlinestartlocal.nw\n" +
+		"X 30\n" +
+		"Y 30\n"
+	if err := os.WriteFile(filepath.Join(server.config.GetBasePath(), "accounts", "moondeath.txt"), []byte(account), 0644); err != nil {
+		t.Fatalf("write account: %v", err)
+	}
+	p := NewPlayer(nil, server)
+
+	if !p.handleLogin(buildLoginPacket(t, 6, 42, "G3D0311C", "moondeath", "pass", "win,test,6.037")) {
+		t.Fatalf("RC2 login was rejected")
+	}
+
+	if p.levelName != "" || p.currentLevel != nil || p.x != 0 || p.y != 0 {
+		t.Fatalf("RC inherited world state: level=%q current=%v x=%d y=%d", p.levelName, p.currentLevel, p.x, p.y)
 	}
 }
 
@@ -985,7 +1048,7 @@ func TestPostLoginTailExchangesAddPlayerAndOtherProps(t *testing.T) {
 	}
 }
 
-func TestPostLoginTailDoesNotSendExistingRCToGameClient(t *testing.T) {
+func TestPostLoginTailSendsExistingRCAsBlankLevelPlayerListEntry(t *testing.T) {
 	server := &Server{
 		logger:   NewLogger("", false),
 		settings: NewSettings(),
@@ -1011,7 +1074,7 @@ func TestPostLoginTailDoesNotSendExistingRCToGameClient(t *testing.T) {
 	}
 	rc.accountName = "moondeath"
 	rc.character.nickName = "Not Denveous"
-	rc.levelName = "onlinestartlocal.nw"
+	rc.communityName = "moondeath"
 	server.players[p.id] = p
 	server.players[rc.id] = rc
 
@@ -1019,8 +1082,49 @@ func TestPostLoginTailDoesNotSendExistingRCToGameClient(t *testing.T) {
 
 	rcAdd := append([]byte{PLO_ADDPLAYER + 32}, NewBuffer().WriteGShort(rc.id).Bytes()...)
 	rcProps := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(rc.id).Bytes()...)
-	if bytes.Contains(p.outQueue, rcAdd) || bytes.Contains(p.outQueue, rcProps) {
-		t.Fatalf("game client received RC as level player: % X", p.outQueue)
+	if !bytes.Contains(p.outQueue, rcAdd) || !bytes.Contains(p.outQueue, rcProps) {
+		t.Fatalf("game client did not receive RC playerlist entry: % X", p.outQueue)
+	}
+	blankLevel := []byte{PLPROP_CURLEVEL + 32, 1 + 32, ' '}
+	if !bytes.Contains(p.outQueue, blankLevel) {
+		t.Fatalf("RC playerlist entry did not use blank level: % X", p.outQueue)
+	}
+}
+
+func TestPostLoginTailSendsNPCServerPlayerListEntry(t *testing.T) {
+	server := &Server{
+		logger:   NewLogger("", false),
+		settings: NewSettings(),
+		players:  make(map[uint16]*Player),
+	}
+	p := &Player{
+		id:            2,
+		server:        server,
+		playerType:    PLTYPE_CLIENT3,
+		versionId:     222,
+		queueOutgoing: true,
+	}
+	p.accountName = "Z"
+	p.character.nickName = "Z"
+	p.levelName = "onlinestartlocal.nw"
+	npc := &Player{
+		id:         1,
+		server:     server,
+		playerType: PLTYPE_NPCSERVER,
+		loaded:     true,
+	}
+	npc.accountName = "(npcserver)"
+	npc.character.nickName = "NPC-Server (Server)"
+	npc.communityName = "(npcserver)"
+	server.players[p.id] = p
+	server.players[npc.id] = npc
+
+	p.sendPostLoginTail()
+
+	npcAdd := append([]byte{PLO_ADDPLAYER + 32}, NewBuffer().WriteGShort(npc.id).Bytes()...)
+	npcProps := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(npc.id).Bytes()...)
+	if !bytes.Contains(p.outQueue, npcAdd) || !bytes.Contains(p.outQueue, npcProps) {
+		t.Fatalf("game client did not receive NPC server playerlist entry: % X", p.outQueue)
 	}
 }
 
@@ -1237,7 +1341,7 @@ func TestServerListSendsAllowedVersionsText(t *testing.T) {
 	}
 }
 
-func TestServerListDoesNotSendRCPlayers(t *testing.T) {
+func TestServerListSendsRCPlayersForPlayerList(t *testing.T) {
 	server := &Server{logger: NewLogger("", false)}
 	sl := &ServerList{
 		server:    server,
@@ -1253,12 +1357,16 @@ func TestServerListDoesNotSendRCPlayers(t *testing.T) {
 
 	select {
 	case packet := <-sl.sendQueue:
-		t.Fatalf("RC player was sent to listserver: % X", packet)
+		rcAdd := append([]byte{SVO_PLYRADD + 32}, NewBuffer().WriteGShort(rc.id).Bytes()...)
+		if !bytes.Contains(packet, rcAdd) {
+			t.Fatalf("RC player list packet = % X, want % X", packet, rcAdd)
+		}
 	default:
+		t.Fatalf("RC player was not sent to listserver player list")
 	}
 }
 
-func TestServerListSendPlayersIncludesNPCServerButExcludesRC(t *testing.T) {
+func TestServerListSendPlayersIncludesNPCServerAndRC(t *testing.T) {
 	server := &Server{
 		logger:   NewLogger("", false),
 		settings: NewSettings(),
@@ -1292,8 +1400,8 @@ func TestServerListSendPlayersIncludesNPCServerButExcludesRC(t *testing.T) {
 	if !packetListContains(packets, npcAdd) {
 		t.Fatalf("sendPlayers did not include NPC server, packets=% X", packets)
 	}
-	if packetListContains(packets, rcAdd) {
-		t.Fatalf("sendPlayers included RC player, packets=% X", packets)
+	if !packetListContains(packets, rcAdd) {
+		t.Fatalf("sendPlayers did not include RC player, packets=% X", packets)
 	}
 }
 
@@ -1944,6 +2052,39 @@ func TestItemTakeAwardsPlayerAndRemovesLevelItem(t *testing.T) {
 	wantDel := []byte{PLO_ITEMDEL + 32, 10 + 32, 12 + 32, '\n'}
 	if !bytes.Contains(other.outQueue, wantDel) {
 		t.Fatalf("observer did not receive item delete % X in % X", wantDel, other.outQueue)
+	}
+}
+
+func TestItemAddDoesNotEchoToSenderWhenAlone(t *testing.T) {
+	level := NewLevel()
+	server := &Server{
+		logger:  NewLogger("", false),
+		players: make(map[uint16]*Player),
+		levels:  map[string]*Level{"onlinestartlocal": level},
+	}
+	p := &Player{
+		id:            1,
+		server:        server,
+		currentLevel:  level,
+		playerType:    PLTYPE_CLIENT3,
+		loaded:        true,
+		queueOutgoing: true,
+	}
+	p.levelName = "onlinestartlocal"
+	server.players[p.id] = p
+	level.addPlayer(p)
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_ITEMADD).WriteGChar(10).WriteGChar(12).WriteGChar(byte(ItemGreenRupee))
+	if !p.msgPLI_ITEMADD(packet.Bytes()) {
+		t.Fatalf("msgPLI_ITEMADD returned false")
+	}
+
+	if len(level.items) != 1 {
+		t.Fatalf("level items = %d, want 1", len(level.items))
+	}
+	if len(p.outQueue) != 0 {
+		t.Fatalf("sender received echoed item add: % X", p.outQueue)
 	}
 }
 
@@ -2879,13 +3020,24 @@ func TestFireSpyAndThrowCarriedForwardRawBodyWithPlayerId(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
+	level := NewLevel()
+	server := &Server{logger: NewLogger("", false), players: make(map[uint16]*Player)}
 	p := &Player{
-		conn:       serverConn,
-		server:     &Server{logger: NewLogger("", false)},
-		encryption: *NewEncryption(),
-		id:         12,
+		server:       server,
+		currentLevel: level,
+		id:           12,
 	}
-	p.encryption.SetGen(ENCRYPT_GEN_1)
+	other := &Player{
+		conn:       serverConn,
+		server:     server,
+		encryption: *NewEncryption(),
+		id:         13,
+	}
+	other.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[p.id] = p
+	server.players[other.id] = other
+	level.addPlayer(p)
+	level.addPlayer(other)
 
 	fireBody := []byte{0x21, 0x22, 0x23}
 	throwBody := []byte{0x24, 0x25}
@@ -3481,6 +3633,61 @@ func TestSendAccountWeaponUsesDefaultWeaponPacketForBombAndBow(t *testing.T) {
 	}
 }
 
+func TestSendAccountWeaponRespectsDefaultWeaponsServerOption(t *testing.T) {
+	p := &Player{
+		server:        &Server{logger: NewLogger("", false), settings: NewSettings(), weapons: make(map[string]*Weapon)},
+		queueOutgoing: true,
+		encryption:    *NewEncryption(),
+	}
+	p.server.settings.Set("defaultweapons", "false")
+	p.encryption.SetGen(ENCRYPT_GEN_1)
+
+	if p.sendAccountWeapon("bomb") {
+		t.Fatalf("sendAccountWeapon returned true with defaultweapons=false")
+	}
+	if len(p.outQueue) != 0 {
+		t.Fatalf("default weapon packet was sent with defaultweapons=false: % X", p.outQueue)
+	}
+}
+
+func TestMissingDefaultWeaponDeletesSkipAccountBombAndBow(t *testing.T) {
+	p := &Player{
+		server:        &Server{logger: NewLogger("", false), settings: NewSettings()},
+		queueOutgoing: true,
+		encryption:    *NewEncryption(),
+	}
+	p.weaponList = []string{"bomb", "bow"}
+	p.encryption.SetGen(ENCRYPT_GEN_1)
+
+	p.sendMissingDefaultWeaponDeletes()
+
+	bombDel := []byte{PLO_NPCWEAPONDEL + 32, 'B', 'o', 'm', 'b', '\n'}
+	bowDel := []byte{PLO_NPCWEAPONDEL + 32, 'B', 'o', 'w', '\n'}
+	if bytes.Contains(p.outQueue, bombDel) || bytes.Contains(p.outQueue, bowDel) {
+		t.Fatalf("deleted account default weapons: % X", p.outQueue)
+	}
+	if len(p.outQueue) != 0 {
+		t.Fatalf("unexpected default weapon deletes: % X", p.outQueue)
+	}
+}
+
+func TestMissingDefaultWeaponDeletesRemoveAbsentBombAndBow(t *testing.T) {
+	p := &Player{
+		server:        &Server{logger: NewLogger("", false), settings: NewSettings()},
+		queueOutgoing: true,
+		encryption:    *NewEncryption(),
+	}
+	p.encryption.SetGen(ENCRYPT_GEN_1)
+
+	p.sendMissingDefaultWeaponDeletes()
+
+	want := []byte{PLO_NPCWEAPONDEL + 32, 'B', 'o', 'm', 'b', '\n'}
+	want = append(want, PLO_NPCWEAPONDEL+32, 'B', 'o', 'w', '\n')
+	if !bytes.Equal(p.outQueue, want) {
+		t.Fatalf("default weapon delete packets = % X, want % X", p.outQueue, want)
+	}
+}
+
 func TestSendAccountWeaponFallsBackToScriptWeapon(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -3559,13 +3766,24 @@ func TestShootParsesCompactProjectilePacket(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
+	level := NewLevel()
+	server := &Server{logger: NewLogger("", false), players: make(map[uint16]*Player)}
 	p := &Player{
-		conn:       serverConn,
-		server:     &Server{logger: NewLogger("", false)},
-		encryption: *NewEncryption(),
-		id:         14,
+		server:       server,
+		currentLevel: level,
+		id:           14,
 	}
-	p.encryption.SetGen(ENCRYPT_GEN_1)
+	other := &Player{
+		conn:       serverConn,
+		server:     server,
+		encryption: *NewEncryption(),
+		id:         15,
+	}
+	other.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[p.id] = p
+	server.players[other.id] = other
+	level.addPlayer(p)
+	level.addPlayer(other)
 
 	packet := NewBuffer()
 	packet.WriteByte(PLI_SHOOT)
@@ -3615,13 +3833,24 @@ func TestShoot2ForwardsRawBodyWithPlayerId(t *testing.T) {
 	defer serverConn.Close()
 	defer clientConn.Close()
 
+	level := NewLevel()
+	server := &Server{logger: NewLogger("", false), players: make(map[uint16]*Player)}
 	p := &Player{
-		conn:       serverConn,
-		server:     &Server{logger: NewLogger("", false)},
-		encryption: *NewEncryption(),
-		id:         15,
+		server:       server,
+		currentLevel: level,
+		id:           15,
 	}
-	p.encryption.SetGen(ENCRYPT_GEN_1)
+	other := &Player{
+		conn:       serverConn,
+		server:     server,
+		encryption: *NewEncryption(),
+		id:         16,
+	}
+	other.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[p.id] = p
+	server.players[other.id] = other
+	level.addPlayer(p)
+	level.addPlayer(other)
 
 	body := []byte{0x20, 0x21, 0x22, 0x23}
 	done := make(chan struct{}, 1)
