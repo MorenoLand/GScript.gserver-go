@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -155,12 +156,13 @@ func TestRCChatRelaysToConnectedRCs(t *testing.T) {
 	rc.msgPLI_RC_CHAT([]byte{PLI_RC_CHAT, 'o', 'h'})
 
 	want := append([]byte{PLO_RC_CHAT + 32}, []byte("Admin: oh")...)
+	want = append(want, '\n')
 	if !bytes.Equal(rc.outQueue, want) {
 		t.Fatalf("rc chat packet = % X, want % X", rc.outQueue, want)
 	}
 }
 
-func TestRCServerOptionsGetSendsReadableRawConfig(t *testing.T) {
+func TestRCServerOptionsGetSendsTokenizedConfigAsSinglePacket(t *testing.T) {
 	server := newLoginTestServer(t)
 	server.settings.Set("name", "Orion-Go")
 	server.settings.Set("staff", "(Manager),moondeath")
@@ -174,15 +176,16 @@ func TestRCServerOptionsGetSendsReadableRawConfig(t *testing.T) {
 	if !bytes.HasPrefix(rc.outQueue, []byte{PLO_RC_SERVEROPTIONSGET + 32}) {
 		t.Fatalf("serveroptions packet id = % X", rc.outQueue)
 	}
-	if bytes.Contains(rc.outQueue, []byte{1}) {
-		t.Fatalf("serveroptions payload contained control separators: % X", rc.outQueue)
+	payload := rc.outQueue[1 : len(rc.outQueue)-1]
+	if bytes.ContainsAny(payload, "\x01\n\r") {
+		t.Fatalf("serveroptions payload contained packet-breaking separators: % X", rc.outQueue)
 	}
-	if !bytes.Contains(rc.outQueue, []byte("name=Orion-Go\n")) || !bytes.Contains(rc.outQueue, []byte("staff=(Manager),moondeath\n")) {
-		t.Fatalf("serveroptions payload missing readable lines: %q", rc.outQueue)
+	if !bytes.Contains(payload, []byte("name=Orion-Go")) || !bytes.Contains(payload, []byte("\"staff=(Manager),moondeath\"")) {
+		t.Fatalf("serveroptions payload missing tokenized lines: %q", payload)
 	}
 }
 
-func TestRCFolderConfigGetUsesFolderConfigPacketAndRawText(t *testing.T) {
+func TestRCFolderConfigGetUsesFolderConfigPacketAndTokenizedText(t *testing.T) {
 	server := newLoginTestServer(t)
 	configDir := filepath.Join(server.config.GetBasePath(), "config")
 	if err := os.MkdirAll(configDir, 0755); err != nil {
@@ -198,10 +201,26 @@ func TestRCFolderConfigGetUsesFolderConfigPacketAndRawText(t *testing.T) {
 
 	rc.msgPLI_RC_FOLDERCONFIGGET([]byte{PLI_RC_FOLDERCONFIGGET})
 
-	want := append([]byte{PLO_RC_FOLDERCONFIGGET + 32}, []byte("level *.nw\nlevel levels/*.graal\n")...)
+	want := append([]byte{PLO_RC_FOLDERCONFIGGET + 32}, []byte("\"level *.nw\",\"level levels/*.graal\"")...)
 	want = append(want, '\n')
 	if !bytes.Equal(rc.outQueue, want) {
 		t.Fatalf("folderconfig packet = % X, want % X", rc.outQueue, want)
+	}
+}
+
+func TestGTokenizeTextRoundTripsConfigLines(t *testing.T) {
+	input := "name=Orion-Go\nstaff=(Manager),moondeath\npath=levels/*.graal\nquote=a \"quoted\" value\n"
+	tokenized := gtokenizeText(input)
+	want := "name=Orion-Go,\"staff=(Manager),moondeath\",\"path=levels/*.graal\",\"quote=a \"\"quoted\"\" value\""
+	if tokenized != want {
+		t.Fatalf("gtokenizeText = %q, want %q", tokenized, want)
+	}
+	if got := guntokenizeText(tokenized); got != strings.TrimSuffix(input, "\n") {
+		t.Fatalf("guntokenizeText = %q, want %q", got, strings.TrimSuffix(input, "\n"))
+	}
+	folderConfig := "\"level *.nw\",\"level levels/*.graal\""
+	if got := guntokenizeText(folderConfig); got != "level *.nw\nlevel levels/*.graal" {
+		t.Fatalf("guntokenizeText quoted first field = %q", got)
 	}
 }
 

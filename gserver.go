@@ -778,6 +778,16 @@ func (s *Server) sendPacketToType(playerType int, data []byte) {
 		}
 	}
 }
+
+func (s *Server) sendRCChat(message string) {
+	s.playerMu.RLock()
+	defer s.playerMu.RUnlock()
+	for _, p := range s.players {
+		if p != nil && p.playerType&PLTYPE_ANYRC != 0 {
+			p.send(NewBufferFromBytes(rcChatPacket(message)))
+		}
+	}
+}
 func (s *Server) sendPacketToAll(data []byte, excludeId uint16) {
 	s.playerMu.RLock()
 	defer s.playerMu.RUnlock()
@@ -1440,6 +1450,83 @@ func rcChatPacket(message string) []byte {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_RC_CHAT).Write([]byte(message))
 	return buf.Bytes()
+}
+
+func gtokenizeText(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	text = strings.ReplaceAll(text, "\r", "\n")
+	if text == "" {
+		return ""
+	}
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	lines := strings.Split(text, "\n")
+	tokens := make([]string, 0, len(lines))
+	for _, line := range lines[:len(lines)-1] {
+		line = strings.ReplaceAll(line, "\r", "")
+		complex := strings.TrimSpace(line) == ""
+		for i := 0; i < len(line) && !complex; i++ {
+			if line[i] < 33 || line[i] > 126 || line[i] == ',' || line[i] == '/' {
+				complex = true
+			}
+		}
+		if complex {
+			line = strings.ReplaceAll(line, "\\", "\\\\")
+			line = strings.ReplaceAll(line, "\"", "\"\"")
+			tokens = append(tokens, "\""+line+"\"")
+		} else {
+			tokens = append(tokens, line)
+		}
+	}
+	return strings.Join(tokens, ",")
+}
+
+func guntokenizeText(text string) string {
+	var out strings.Builder
+	inQuote := false
+	start := 0
+	if strings.HasPrefix(text, "\"") {
+		inQuote = true
+		start = 1
+	}
+	for i := start; i < len(text); i++ {
+		ch := text[i]
+		switch ch {
+		case ',':
+			if inQuote {
+				out.WriteByte(ch)
+			} else {
+				out.WriteByte('\n')
+				for i+1 < len(text) && text[i+1] == ' ' {
+					i++
+				}
+				if i+1 < len(text) && text[i+1] == '"' {
+					inQuote = true
+					i++
+				}
+			}
+		case '"':
+			if inQuote {
+				if i+1 < len(text) && text[i+1] == '"' {
+					out.WriteByte('"')
+					i++
+				} else if i+1 < len(text) && text[i+1] == ',' {
+					inQuote = false
+				}
+			} else {
+				out.WriteByte(ch)
+			}
+		case '\\':
+			if i+1 < len(text) && text[i+1] == '\\' {
+				out.WriteByte('\\')
+				i++
+			}
+		default:
+			out.WriteByte(ch)
+		}
+	}
+	return out.String()
 }
 
 func (p *Player) sendRCPostLoginTail() {
@@ -4319,7 +4406,7 @@ func (p *Player) msgPLI_RC_SERVEROPTIONSGET(packet []byte) bool {
 	}
 	buf := NewBuffer()
 	buf.WriteByte(PLO_RC_SERVEROPTIONSGET)
-	buf.Write([]byte(settingsStr))
+	buf.Write([]byte(gtokenizeText(settingsStr)))
 	p.send(buf)
 	return true
 }
@@ -4333,9 +4420,10 @@ func (p *Player) msgPLI_RC_SERVEROPTIONSSET(packet []byte) bool {
 		p.send(NewBufferFromBytes(rcChatPacket("Server: " + p.accountName + " is not authorized to change the server options.")))
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
-	options := buf.ReadGString()
-	options = strings.ReplaceAll(options, "\x01", "\n")
+	options := ""
+	if len(packet) > 1 {
+		options = guntokenizeText(string(packet[1:]))
+	}
 	adminOptions := []string{"name", "description", "url", "serverip", "serverport", "localip", "listip", "listport", "maxplayers", "onlystaff", "nofoldersconfig", "oldcreated", "serverside", "triggerhack_weapons", "triggerhack_guilds", "triggerhack_groups", "triggerhack_files", "triggerhack_rc", "flaghack_movement", "flaghack_ip", "sharefolder", "language"}
 	if !p.hasRight(PLPERM_MODIFYSTAFFACCOUNT) {
 		var filteredOptions []string
@@ -4370,7 +4458,7 @@ func (p *Player) msgPLI_RC_SERVEROPTIONSSET(packet []byte) bool {
 	p.server.settings.Save("config/serveroptions.txt")
 	p.server.loadSettings()
 	p.server.logger.Info("%s has updated the server options.", p.accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has updated the server options."))
+	p.server.sendRCChat(p.accountName + " has updated the server options.")
 	return true
 }
 func (p *Player) msgPLI_RC_FOLDERCONFIGGET(packet []byte) bool {
@@ -4387,7 +4475,7 @@ func (p *Player) msgPLI_RC_FOLDERCONFIGGET(packet []byte) bool {
 	foldersConfig = strings.ReplaceAll(foldersConfig, "\r", "\n")
 	buf := NewBuffer()
 	buf.WriteByte(PLO_RC_FOLDERCONFIGGET)
-	buf.Write([]byte(foldersConfig))
+	buf.Write([]byte(gtokenizeText(foldersConfig)))
 	p.send(buf)
 	return true
 }
@@ -4401,8 +4489,10 @@ func (p *Player) msgPLI_RC_FOLDERCONFIGSET(packet []byte) bool {
 		p.send(NewBufferFromBytes(rcChatPacket("Server: " + p.accountName + " is not authorized to change the folder config.")))
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
-	folders := buf.ReadGString()
+	folders := ""
+	if len(packet) > 1 {
+		folders = guntokenizeText(string(packet[1:]))
+	}
 	folders = strings.ReplaceAll(folders, "\\", "")
 	folders = strings.ReplaceAll(folders, "\n", "\r\n")
 	if err := p.server.config.SaveFile("config/foldersconfig.txt", []byte(folders)); err != nil {
@@ -4411,7 +4501,7 @@ func (p *Player) msgPLI_RC_FOLDERCONFIGSET(packet []byte) bool {
 	}
 	p.server.loadFileSystem()
 	p.server.logger.Info("%s updated folder config", p.accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" updated the folder config."))
+	p.server.sendRCChat(p.accountName + " updated the folder config.")
 	return true
 }
 func (p *Player) msgPLI_RC_RESPAWNSET(packet []byte) bool {
@@ -4463,7 +4553,7 @@ func (p *Player) msgPLI_RC_DISCONNECTPLAYER(packet []byte) bool {
 		disconnectMessage += "."
 		p.server.logger.Info("%s disconnected %s", p.accountName, targetPlayer.accountName)
 	}
-	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" disconnected "+targetPlayer.accountName))
+	p.server.sendRCChat(p.accountName + " disconnected " + targetPlayer.accountName)
 	targetPlayer.sendPacket([]byte{PLO_DISCMESSAGE, 0})
 	targetPlayer.writeString8(disconnectMessage)
 	p.server.removePlayer(targetPlayer)
@@ -4600,7 +4690,7 @@ func (p *Player) msgPLI_RC_SERVERFLAGSSET(packet []byte) bool {
 	}
 	p.server.saveFlags()
 	p.server.logger.Info("%s has updated the server flags.", p.accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has updated the server flags."))
+	p.server.sendRCChat(p.accountName + " has updated the server flags.")
 	return true
 }
 func (p *Player) msgPLI_RC_ACCOUNTADD(packet []byte) bool {
@@ -4627,7 +4717,7 @@ func (p *Player) msgPLI_RC_ACCOUNTADD(packet []byte) bool {
 	account.isLoadOnly = loadOnly
 	account.SaveAccount()
 	p.server.logger.Info("%s has created a new account: %s", p.accountName, accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has created a new account: "+accountName))
+	p.server.sendRCChat(p.accountName + " has created a new account: " + accountName)
 	return true
 }
 func (p *Player) msgPLI_RC_ACCOUNTDEL(packet []byte) bool {
@@ -4661,7 +4751,7 @@ func (p *Player) msgPLI_RC_ACCOUNTDEL(packet []byte) bool {
 		return true
 	}
 	p.server.logger.Info("%s has deleted the account: %s", p.accountName, accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has deleted the account: "+accountName))
+	p.server.sendRCChat(p.accountName + " has deleted the account: " + accountName)
 	return true
 }
 func (p *Player) msgPLI_RC_ACCOUNTLISTGET(packet []byte) bool {
@@ -4780,7 +4870,7 @@ func (p *Player) msgPLI_RC_PLAYERPROPSRESET(packet []byte) bool {
 		accountPath := "accounts/" + accountName + ".txt"
 		os.Remove(accountPath)
 		p.server.logger.Info("%s reset account: %s", p.accountName, accountName)
-		p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has reset the attributes of account: "+accountName))
+		p.server.sendRCChat(p.accountName + " has reset the attributes of account: " + accountName)
 		return true
 	}
 	targetPlayer.resetAccount()
@@ -4791,7 +4881,7 @@ func (p *Player) msgPLI_RC_PLAYERPROPSRESET(packet []byte) bool {
 		p.server.removePlayer(targetPlayer)
 	}
 	p.server.logger.Info("%s reset account: %s", p.accountName, accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has reset the attributes of account: "+accountName))
+	p.server.sendRCChat(p.accountName + " has reset the attributes of account: " + accountName)
 	return true
 }
 func (p *Player) msgPLI_RC_PLAYERPROPSSET2(packet []byte) bool {
@@ -4922,7 +5012,7 @@ func (p *Player) msgPLI_RC_ACCOUNTSET(packet []byte) bool {
 	}
 	targetPlayer.SaveAccount()
 	p.server.logger.Info("%s modified account: %s", p.accountName, accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" modified the account "+accountName))
+	p.server.sendRCChat(p.accountName + " modified the account " + accountName)
 	return true
 }
 func (p *Player) msgPLI_RC_CHAT(packet []byte) bool {
@@ -4931,7 +5021,7 @@ func (p *Player) msgPLI_RC_CHAT(packet []byte) bool {
 	}
 	message := string(packet[1:])
 	p.server.logger.Info("RC CHAT: %s", message)
-	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+": "+message))
+	p.server.sendRCChat(p.accountName + ": " + message)
 	return true
 }
 func (p *Player) msgPLI_PROFILEGET(packet []byte) bool {
@@ -5075,7 +5165,7 @@ func (p *Player) msgPLI_RC_PLAYERRIGHTSSET(packet []byte) bool {
 	targetPlayer.folderList = validFolders
 	targetPlayer.SaveAccount()
 	p.server.logger.Info("%s set rights for account: %s", p.accountName, accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has set the rights of "+accountName))
+	p.server.sendRCChat(p.accountName + " has set the rights of " + accountName)
 	return true
 }
 func (p *Player) msgPLI_RC_PLAYERCOMMENTSGET(packet []byte) bool {
@@ -5146,7 +5236,7 @@ func (p *Player) msgPLI_RC_PLAYERCOMMENTSSET(packet []byte) bool {
 		rcPlayer.LoadAccount(accountName, false)
 	}
 	p.server.logger.Info("%s has set the comments of %s", p.accountName, accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has set the comments of "+accountName))
+	p.server.sendRCChat(p.accountName + " has set the comments of " + accountName)
 	return true
 }
 func (p *Player) msgPLI_RC_PLAYERBANGET(packet []byte) bool {
@@ -5221,7 +5311,7 @@ func (p *Player) msgPLI_RC_PLAYERBANSET(packet []byte) bool {
 	targetPlayer.banReason = reason
 	targetPlayer.SaveAccount()
 	p.server.logger.Info("%s set ban for account: %s (banned=%v)", p.accountName, accountName, banned)
-	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has set the ban of "+accountName))
+	p.server.sendRCChat(p.accountName + " has set the ban of " + accountName)
 	if banned && targetPlayer.id != 0 {
 		targetPlayer.sendPacket([]byte{PLO_DISCMESSAGE, 0})
 		targetPlayer.writeString8(p.accountName + " has banned you.  Reason: " + reason)
@@ -8969,7 +9059,7 @@ WordFilterActions:
 	}
 
 	if wf.showWordsToRC || actionsFound&FILTER_ACTION_TELLRC != 0 {
-		wf.server.sendPacketToType(PLTYPE_RC, rcChatPacket(fmt.Sprintf("Word Filter: Player %s was caught using these words: %s", player.accountName, badwords)))
+		wf.server.sendRCChat(fmt.Sprintf("Word Filter: Player %s was caught using these words: %s", player.accountName, badwords))
 	}
 
 	if actionsFound&FILTER_ACTION_WARN != 0 {
