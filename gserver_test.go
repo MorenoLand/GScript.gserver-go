@@ -939,6 +939,129 @@ func TestBoardModifyBroadcastsAndDropsBushItem(t *testing.T) {
 	}
 }
 
+func TestItemTakeAwardsPlayerAndRemovesLevelItem(t *testing.T) {
+	level := NewLevel()
+	level.addItem(10, 12, ItemBlueRupee)
+	server := &Server{
+		logger:  NewLogger("", false),
+		config:  NewFileSystem(t.TempDir()),
+		players: make(map[uint16]*Player),
+		levels:  map[string]*Level{"onlinestartlocal.nw": level},
+	}
+	p := &Player{
+		id:            1,
+		server:        server,
+		currentLevel:  level,
+		playerType:    PLTYPE_CLIENT3,
+		loaded:        true,
+		queueOutgoing: true,
+	}
+	p.setServer(server)
+	p.levelName = "onlinestartlocal.nw"
+	p.accountName = "moondeath"
+	p.character.nickName = "moondeath"
+	p.character.gralats = 1
+	p.flagList = make(map[string]string)
+	other := &Player{id: 2, server: server, currentLevel: level, playerType: PLTYPE_CLIENT3, queueOutgoing: true}
+	other.conn, _ = net.Pipe()
+	defer other.conn.Close()
+	server.players[p.id] = p
+	server.players[other.id] = other
+	level.players = []uint16{p.id, other.id}
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_ITEMTAKE).WriteGChar(10).WriteGChar(12)
+
+	if !p.msgPLI_ITEMDEL(packet.Bytes()) {
+		t.Fatalf("msgPLI_ITEMDEL returned false")
+	}
+	if len(level.items) != 0 {
+		t.Fatalf("level items = %d, want 0", len(level.items))
+	}
+	if p.character.gralats != 6 || p.rupees != 6 {
+		t.Fatalf("player rupees = character %d prop %d, want 6/6", p.character.gralats, p.rupees)
+	}
+	wantSelf := append([]byte{PLO_PLAYERPROPS + 32, PLPROP_RUPEESCOUNT + 32}, NewBuffer().WriteGInt(6).Bytes()...)
+	wantSelf = append(wantSelf, '\n')
+	if !bytes.Contains(p.outQueue, wantSelf) {
+		t.Fatalf("player did not receive rupee prop % X in % X", wantSelf, p.outQueue)
+	}
+	wantDel := []byte{PLO_ITEMDEL + 32, 10 + 32, 12 + 32, '\n'}
+	if !bytes.Contains(other.outQueue, wantDel) {
+		t.Fatalf("observer did not receive item delete % X in % X", wantDel, other.outQueue)
+	}
+}
+
+func TestOpenChestAwardsOnceAndPersistsChest(t *testing.T) {
+	dir := t.TempDir()
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	chest := &LevelChest{x: 20, y: 24, itemType: ItemGreenRupee, signIndex: 0}
+	level.chests = []*LevelChest{chest}
+	server := &Server{
+		logger:  NewLogger("", false),
+		config:  NewFileSystem(dir),
+		players: make(map[uint16]*Player),
+		levels:  map[string]*Level{"onlinestartlocal.nw": level},
+	}
+	p := &Player{
+		id:            1,
+		server:        server,
+		currentLevel:  level,
+		playerType:    PLTYPE_CLIENT3,
+		loaded:        true,
+		queueOutgoing: true,
+	}
+	p.setServer(server)
+	p.accountName = "moondeath"
+	p.communityName = "moondeath"
+	p.levelName = "onlinestartlocal.nw"
+	p.character.nickName = "moondeath"
+	p.character.gani = "idle.gif"
+	p.maxHitpoints = 3
+	p.character.hitpoints = 3
+	p.character.gralats = 1
+	p.flagList = make(map[string]string)
+	server.players[p.id] = p
+	level.players = []uint16{p.id}
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_OPENCHEST).WriteGChar(20).WriteGChar(24)
+
+	if !p.msgPLI_OPENCHEST(packet.Bytes()) {
+		t.Fatalf("msgPLI_OPENCHEST returned false")
+	}
+	if p.character.gralats != 2 {
+		t.Fatalf("rupees after chest = %d, want 2", p.character.gralats)
+	}
+	chestKey := "20:24:onlinestartlocal.nw"
+	if len(p.chestList) != 1 || p.chestList[0] != chestKey {
+		t.Fatalf("chestList = %#v, want %q", p.chestList, chestKey)
+	}
+	wantChest := []byte{PLO_LEVELCHEST + 32, 1 + 32, 20 + 32, 24 + 32, '\n'}
+	if !bytes.Contains(p.outQueue, wantChest) {
+		t.Fatalf("player did not receive open chest packet % X in % X", wantChest, p.outQueue)
+	}
+	data, err := os.ReadFile(dir + "\\accounts\\moondeath.txt")
+	if err != nil {
+		t.Fatalf("read saved account: %v", err)
+	}
+	if !bytes.Contains(data, []byte("CHEST "+chestKey+"\r\n")) {
+		t.Fatalf("saved account missing chest key %q:\n%s", chestKey, data)
+	}
+
+	p.outQueue = nil
+	if !p.msgPLI_OPENCHEST(packet.Bytes()) {
+		t.Fatalf("second msgPLI_OPENCHEST returned false")
+	}
+	if p.character.gralats != 2 {
+		t.Fatalf("rupees after second open = %d, want 2", p.character.gralats)
+	}
+	if len(p.outQueue) != 0 {
+		t.Fatalf("second open sent packets: % X", p.outQueue)
+	}
+}
+
 func TestBoardModifyUsesCurrentLevelWhenNameLookupMisses(t *testing.T) {
 	settings := NewSettings()
 	level := NewLevel()

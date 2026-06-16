@@ -2906,7 +2906,7 @@ func (p *Player) sendLevelData(level *Level, levelName string, clientModTime int
 	if !fromAdjacent {
 		p.sendPLO_LEVELBOARDCHANGES(level, time.Time{})
 		for _, chest := range level.chests {
-			p.sendPLO_LEVELCHEST(chest, false)
+			p.sendPLO_LEVELCHEST(chest, p.hasChest(level.getChestKey(chest)))
 		}
 		for _, horse := range level.horses {
 			p.sendPLO_LEVELHORSEADD(horse)
@@ -2951,6 +2951,20 @@ func (p *Player) addWeapon(weaponName string) {
 	}
 	p.weaponList = append(p.weaponList, weaponName)
 }
+func (p *Player) hasChest(chestKey string) bool {
+	for _, chest := range p.chestList {
+		if chest == chestKey {
+			return true
+		}
+	}
+	return false
+}
+func (p *Player) addChest(chestKey string) {
+	if chestKey == "" || p.hasChest(chestKey) {
+		return
+	}
+	p.chestList = append(p.chestList, chestKey)
+}
 func (p *Player) deleteWeapon(weaponName string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -2962,6 +2976,21 @@ func (p *Player) deleteWeapon(weaponName string) {
 	}
 }
 func (p *Player) setGroup(group string) { p.levelGroup = group }
+
+func (p *Player) applyLevelItem(itemType LevelItemType) bool {
+	if getItemName(itemType) == "" {
+		return false
+	}
+	props := getItemPlayerProp(itemType, p)
+	if len(props) > 0 {
+		p.msgPLI_PLAYERPROPS(append([]byte{PLI_PLAYERPROPS}, props...))
+		packet := append([]byte{PLO_PLAYERPROPS}, props...)
+		packet = append(packet, '\n')
+		p.sendPacket(packet)
+	}
+	p.SaveAccount()
+	return true
+}
 
 func (p *Player) msgPLI_LEVELWARP(packet []byte) bool {
 	buf := NewBufferFromBytes(packet[1:])
@@ -3070,7 +3099,7 @@ func (p *Player) getProp(propId int) []byte {
 	case PLPROP_CURPOWER:
 		buf.WriteGChar(byte(p.character.hitpoints * 2))
 	case PLPROP_RUPEESCOUNT:
-		buf.WriteGInt(p.rupees)
+		buf.WriteGInt(uint32(p.character.gralats))
 	case PLPROP_ARROWSCOUNT:
 		buf.WriteGChar(byte(p.character.arrows))
 	case PLPROP_BOMBSCOUNT:
@@ -3273,6 +3302,7 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 			p.character.hitpoints = int(buf.ReadGChar()) / 2
 		case PLPROP_RUPEESCOUNT:
 			p.rupees = buf.ReadGInt()
+			p.character.gralats = int(p.rupees)
 		case PLPROP_ARROWSCOUNT:
 			p.character.arrows = int(buf.ReadGChar())
 		case PLPROP_BOMBSCOUNT:
@@ -3636,15 +3666,39 @@ func (p *Player) msgPLI_THROWCARRIED(packet []byte) bool {
 	return true
 }
 func (p *Player) msgPLI_ITEMADD(packet []byte) bool {
+	if len(packet) >= 4 {
+		buf := NewBufferFromBytes(packet[1:])
+		x := float32(buf.ReadGChar())
+		y := float32(buf.ReadGChar())
+		itemType := LevelItemType(buf.ReadGChar())
+		if level := p.getCurrentLevel(); level != nil {
+			level.addItem(x, y, itemType)
+		}
+	}
 	out := NewBuffer()
 	out.WriteByte(PLO_ITEMADD).Write(packet[1:])
 	p.sendToCurrentLevelExceptSelf(out.Bytes())
 	return true
 }
 func (p *Player) msgPLI_ITEMDEL(packet []byte) bool {
+	var itemType LevelItemType = -1
+	if len(packet) >= 3 {
+		buf := NewBufferFromBytes(packet[1:])
+		x := float32(buf.ReadGChar())
+		y := float32(buf.ReadGChar())
+		if level := p.getCurrentLevel(); level != nil {
+			itemType = level.removeItem(x, y)
+			if itemType == LevelItemType(-1) {
+				itemType = level.removeItem(x/2, y/2)
+			}
+		}
+	}
 	out := NewBuffer()
 	out.WriteByte(PLO_ITEMDEL).Write(packet[1:])
 	p.sendToCurrentLevelExceptSelf(out.Bytes())
+	if packet[0] == PLI_ITEMTAKE && itemType != LevelItemType(-1) {
+		p.applyLevelItem(itemType)
+	}
 	return true
 }
 func (p *Player) msgPLI_CLAIMPKER(packet []byte) bool {
@@ -3729,10 +3783,16 @@ func (p *Player) msgPLI_OPENCHEST(packet []byte) bool {
 	buf := NewBufferFromBytes(packet[1:])
 	x := int(buf.ReadGChar())
 	y := int(buf.ReadGChar())
-	if level, ok := p.server.levels[p.levelName]; ok {
+	if level := p.getCurrentLevel(); level != nil {
 		for _, chest := range level.chests {
 			if chest.x == x && chest.y == y {
-				p.sendPLO_LEVELCHEST(chest, true)
+				chestKey := level.getChestKey(chest)
+				if !p.hasChest(chestKey) {
+					p.applyLevelItem(chest.itemType)
+					p.sendPLO_LEVELCHEST(chest, true)
+					p.addChest(chestKey)
+					p.SaveAccount()
+				}
 				break
 			}
 		}
@@ -7224,6 +7284,25 @@ func (l *Level) addItem(x, y float32, itemType LevelItemType) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.items = append(l.items, LevelItem{x: x, y: y, itemType: itemType})
+}
+
+func (l *Level) removeItem(x, y float32) LevelItemType {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i, item := range l.items {
+		if item.x == x && item.y == y {
+			l.items = append(l.items[:i], l.items[i+1:]...)
+			return item.itemType
+		}
+	}
+	return LevelItemType(-1)
+}
+
+func (l *Level) getChestKey(chest *LevelChest) string {
+	if l == nil || chest == nil {
+		return ""
+	}
+	return fmt.Sprintf("%d:%d:%s", chest.x, chest.y, l.levelName)
 }
 
 func isRespawningTile(tile int16) bool {
