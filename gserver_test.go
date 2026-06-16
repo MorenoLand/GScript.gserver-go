@@ -1264,6 +1264,31 @@ func TestInitNPCServerBroadcastsToOnlineGameClients(t *testing.T) {
 	}
 }
 
+func TestNPCServerQuerySendsNCAddressToAuthorizedRC(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.settings.Set("serverip", "orion.moreno.land")
+	server.settings.Set("serverport", "14802")
+	server.initNPCServer()
+
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.accountName = "Admin"
+	rc.adminRights = PLPERM_NPCCONTROL
+	rc.loaded = true
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_NPCSERVERQUERY).WriteGShort(1).Write([]byte("location"))
+	rc.msgPLI_NPCSERVERQUERY(packet.Bytes())
+
+	want := append([]byte{PLO_NPCSERVERADDR + 32}, NewBuffer().WriteGShort(1).Bytes()...)
+	want = append(want, []byte("orion.moreno.land,14802")...)
+	if !bytes.Contains(rc.outQueue, want) {
+		t.Fatalf("npc-server address packet = % X, want to contain % X", rc.outQueue, want)
+	}
+}
+
 func TestGetPropUnknown81IsMarkerWithoutPayload(t *testing.T) {
 	p := &Player{
 		id:            1,
@@ -2086,7 +2111,7 @@ func TestPlayerWarpUsesClientWireFormat(t *testing.T) {
 	go func() {
 		p.setX(32)
 		p.setY(32)
-		p.sendPLO_PLAYERWARP(p.x, p.y, p.z, "onlinestartlocal.nw")
+		p.sendPlayerWarp(p.x, p.y, p.z, "onlinestartlocal.nw")
 		done <- struct{}{}
 	}()
 

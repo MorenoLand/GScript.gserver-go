@@ -2801,7 +2801,7 @@ func (p *Player) sendPLO_PLAYERPROPS() bool {
 	p.sendProps(getLoginProps)
 	return true
 }
-func (p *Player) sendPLO_PLAYERWARP(x, y, z int16, levelName string) bool {
+func (p *Player) sendPlayerWarp(x, y, z int16, levelName string) bool {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_PLAYERWARP)
 	buf.WriteGChar(byte(x / 8))
@@ -3380,7 +3380,7 @@ func (p *Player) warp(levelName string, x float64, y float64, clientModTime ...i
 	p.setY(float32(y))
 	p.levelName = levelName
 	level.addPlayer(p)
-	p.sendPLO_PLAYERWARP(p.x, p.y, p.z, levelName)
+	p.sendPlayerWarp(p.x, p.y, p.z, levelName)
 	p.sendLevelData(level, levelName, modTime, false, modTime == 0)
 	p.loaded = true
 	p.server.logger.Debug("warp: Player %s warped to %s at (%.0f, %.0f)", p.accountName, levelName, x, y)
@@ -5871,6 +5871,7 @@ func (p *Player) msgPLI_RC_FILEBROWSER_UP(packet []byte) bool {
 }
 func (p *Player) msgPLI_NPCSERVERQUERY(packet []byte) bool {
 	p.server.logger.Debug("NPCSERVERQUERY")
+	p.server.ensureNPCServer().SendNCAddress(p, packet)
 	return true
 }
 func (p *Player) msgPLI_RC_FILEBROWSER_MOVE(packet []byte) bool {

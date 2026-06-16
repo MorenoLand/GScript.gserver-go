@@ -1,6 +1,9 @@
 package main
 
-import "time"
+import (
+	"strings"
+	"time"
+)
 
 const npcServerAccountName = "(npcserver)"
 
@@ -33,7 +36,7 @@ func (s *Server) syncNPCServer() {
 }
 
 func (n *NPCServer) Enabled() bool {
-	return n != nil && n.host != nil && n.host.settings.GetBool("serverside", false)
+	return n != nil && n.host != nil && n.host.settings != nil && n.host.settings.GetBool("serverside", false)
 }
 
 func (n *NPCServer) Sync() {
@@ -76,7 +79,7 @@ func (n *NPCServer) Start() *Player {
 		return existing
 	}
 
-	p := n.newPseudoPlayer()
+	p := n.newNPCPlayer()
 	n.host.playerMu.Lock()
 	n.host.players[p.id] = p
 	n.host.playerMu.Unlock()
@@ -86,6 +89,70 @@ func (n *NPCServer) Start() *Player {
 	n.host.broadcastPlayerListEntryToClients(p)
 	n.host.logger.Info("NPC-Server initialized (id=%d account=%s nickname=%s type=%d x=%d y=%d)", p.id, p.accountName, p.character.nickName, p.playerType, int(p.x), int(p.y))
 	return p
+}
+
+func (n *NPCServer) SendNCAddress(to *Player, queryPacket []byte) bool {
+	if n == nil || n.host == nil || to == nil {
+		return false
+	}
+	if to.playerType&PLTYPE_ANYRC == 0 || !to.hasRight(PLPERM_NPCCONTROL) {
+		return false
+	}
+	if !n.isLocationQuery(queryPacket) {
+		return false
+	}
+	npcPlayer := n.Player()
+	if npcPlayer == nil {
+		npcPlayer = n.Start()
+	}
+	if npcPlayer == nil {
+		return false
+	}
+	buf := NewBuffer()
+	buf.WriteByte(PLO_NPCSERVERADDR).WriteGShort(npcPlayer.id).Write([]byte(n.AddressFor(to)))
+	to.send(buf)
+	return true
+}
+
+func (n *NPCServer) isLocationQuery(packet []byte) bool {
+	if len(packet) == 0 {
+		return true
+	}
+	if packet[0] == PLI_NPCSERVERQUERY {
+		packet = packet[1:]
+	}
+	if len(packet) >= 2 {
+		packet = packet[2:]
+	}
+	message := strings.Trim(string(packet), "\x00\r\n\t ")
+	return message == "" || strings.EqualFold(message, "location")
+}
+
+func (n *NPCServer) AddressFor(requester *Player) string {
+	host := ""
+	if n.host.adminSettings != nil {
+		host = n.host.adminSettings.Get("ns_ip")
+	}
+	if host == "" && n.host.settings != nil {
+		host = n.host.settings.Get("ns_ip")
+	}
+	if (host == "" || strings.EqualFold(host, "auto")) && n.host.settings != nil {
+		host = n.host.settings.Get("serverip")
+	}
+	if requester != nil && requester.accountIpStr != "" && n.host.settings != nil && host == n.host.settings.Get("localip") {
+		host = requester.accountIpStr
+	}
+	if host == "" || strings.EqualFold(host, "auto") {
+		host = "127.0.0.1"
+	}
+	port := ""
+	if n.host.settings != nil {
+		port = n.host.settings.Get("serverport")
+	}
+	if port == "" {
+		port = "14802"
+	}
+	return host + "," + port
 }
 
 func (n *NPCServer) SendNPCList(to *Player) {
@@ -125,7 +192,7 @@ func (n *NPCServer) SendNPCAdd(to *Player, npc *NPC) {
 	to.send(buf)
 }
 
-func (n *NPCServer) newPseudoPlayer() *Player {
+func (n *NPCServer) newNPCPlayer() *Player {
 	p := &Player{conn: nil, server: n.host, recvBuffer: make([]byte, 0, 8192), encryption: *NewEncryption(), playerType: PLTYPE_NPCSERVER, cachedLevels: make([]*CachedLevel, 0), rcLargeFiles: make(map[string]string), singleplayerLevels: make(map[string]*Level), channelList: make(map[string]bool), knownFiles: make(map[string]bool), externalPlayers: make(map[uint16]*Player), externalPlayerIdGen: EXTERNALPLAYERID_INIT, firstLevel: true, loaded: true, packetCount: 0, invalidPackets: 0}
 	p.flagList = make(map[string]string)
 	p.folderRights = *NewFilePermissions()
