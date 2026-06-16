@@ -1432,10 +1432,14 @@ func (p *Player) sendRCLoginPayload() {
 }
 
 func (p *Player) sendPLO_RC_CHAT(message string) bool {
-	buf := NewBuffer()
-	buf.WriteByte(PLO_RC_CHAT).WriteString8(message)
-	p.send(buf)
+	p.send(NewBufferFromBytes(rcChatPacket(message)))
 	return true
+}
+
+func rcChatPacket(message string) []byte {
+	buf := NewBuffer()
+	buf.WriteByte(PLO_RC_CHAT).Write([]byte(message))
+	return buf.Bytes()
 }
 
 func (p *Player) sendRCPostLoginTail() {
@@ -2002,6 +2006,7 @@ func (p *Player) handleLogin(packet []byte) bool {
 		p.server.logger.Error("Failed to load account for: %s", account)
 		return false
 	}
+	p.applyServerOptionsStaffRights()
 	if p.conn != nil {
 		p.setAccountIPFromRemoteAddr(p.conn.RemoteAddr())
 	}
@@ -2356,6 +2361,38 @@ func (p *Player) disconnect() {
 	}
 }
 func (p *Player) hasRight(perm int) bool { return p.adminRights&perm != 0 }
+
+func (p *Player) applyServerOptionsStaffRights() {
+	if p.server == nil || p.server.settings == nil || !serverOptionsStaffContains(p.server.settings.Get("staff"), p.accountName) {
+		return
+	}
+	p.adminRights |= allLocalRights()
+	p.isStaff = true
+	if strings.TrimSpace(p.adminIp) == "" || p.adminIp == "0.0.0.0" {
+		p.adminIp = "*.*.*.*"
+	}
+}
+
+func serverOptionsStaffContains(staffList, accountName string) bool {
+	accountName = strings.TrimSpace(accountName)
+	if accountName == "" {
+		return false
+	}
+	for _, entry := range strings.Split(staffList, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" || (strings.HasPrefix(entry, "(") && strings.HasSuffix(entry, ")")) {
+			continue
+		}
+		if strings.EqualFold(entry, accountName) {
+			return true
+		}
+	}
+	return false
+}
+
+func allLocalRights() int {
+	return (PLPERM_NPCCONTROL << 1) - 1
+}
 func (p *Player) sendPLO_LEVELBOARDCHANGES(level *Level, since time.Time) bool {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_LEVELBOARD)
@@ -4280,10 +4317,9 @@ func (p *Player) msgPLI_RC_SERVEROPTIONSGET(packet []byte) bool {
 	for key, value := range settings {
 		settingsStr += key + "=" + value + "\n"
 	}
-	settingsStr = strings.ReplaceAll(settingsStr, "\n", "\x01")
 	buf := NewBuffer()
 	buf.WriteByte(PLO_RC_SERVEROPTIONSGET)
-	buf.WriteString8(settingsStr)
+	buf.Write([]byte(settingsStr))
 	p.send(buf)
 	return true
 }
@@ -4294,10 +4330,7 @@ func (p *Player) msgPLI_RC_SERVEROPTIONSSET(packet []byte) bool {
 	}
 	if !p.hasRight(PLPERM_SETSERVEROPTIONS) {
 		p.server.logger.Warning("%s attempted SERVEROPTIONSSET without permission", p.accountName)
-		buf := NewBuffer()
-		buf.WriteByte(PLO_RC_CHAT)
-		buf.WriteString8("Server: " + p.accountName + " is not authorized to change the server options.")
-		p.send(buf)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: " + p.accountName + " is not authorized to change the server options.")))
 		return true
 	}
 	buf := NewBufferFromBytes(packet)
@@ -4337,10 +4370,7 @@ func (p *Player) msgPLI_RC_SERVEROPTIONSSET(packet []byte) bool {
 	p.server.settings.Save("config/serveroptions.txt")
 	p.server.loadSettings()
 	p.server.logger.Info("%s has updated the server options.", p.accountName)
-	buf2 := NewBuffer()
-	buf2.WriteByte(PLO_RC_CHAT)
-	buf2.WriteString8(p.accountName + " has updated the server options.")
-	p.server.sendPacketToType(PLTYPE_ANYRC, buf2.Bytes())
+	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has updated the server options."))
 	return true
 }
 func (p *Player) msgPLI_RC_FOLDERCONFIGGET(packet []byte) bool {
@@ -4357,7 +4387,7 @@ func (p *Player) msgPLI_RC_FOLDERCONFIGGET(packet []byte) bool {
 	foldersConfig = strings.ReplaceAll(foldersConfig, "\r", "\n")
 	buf := NewBuffer()
 	buf.WriteByte(PLO_RC_FOLDERCONFIGGET)
-	buf.WriteString8(foldersConfig)
+	buf.Write([]byte(foldersConfig))
 	p.send(buf)
 	return true
 }
@@ -4368,10 +4398,7 @@ func (p *Player) msgPLI_RC_FOLDERCONFIGSET(packet []byte) bool {
 	}
 	if !p.hasRight(PLPERM_SETFOLDEROPTIONS) {
 		p.server.logger.Warning("%s attempted FOLDERCONFIGSET without permission", p.accountName)
-		buf := NewBuffer()
-		buf.WriteByte(PLO_RC_CHAT)
-		buf.WriteString8("Server: " + p.accountName + " is not authorized to change the folder config.")
-		p.send(buf)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: " + p.accountName + " is not authorized to change the folder config.")))
 		return true
 	}
 	buf := NewBufferFromBytes(packet)
@@ -4384,10 +4411,7 @@ func (p *Player) msgPLI_RC_FOLDERCONFIGSET(packet []byte) bool {
 	}
 	p.server.loadFileSystem()
 	p.server.logger.Info("%s updated folder config", p.accountName)
-	buf2 := NewBuffer()
-	buf2.WriteByte(PLO_RC_CHAT)
-	buf2.WriteString8(p.accountName + " updated the folder config.")
-	p.server.sendPacketToType(PLTYPE_ANYRC, buf2.Bytes())
+	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" updated the folder config."))
 	return true
 }
 func (p *Player) msgPLI_RC_RESPAWNSET(packet []byte) bool {
@@ -4427,10 +4451,7 @@ func (p *Player) msgPLI_RC_DISCONNECTPLAYER(packet []byte) bool {
 	}
 	if !p.hasRight(PLPERM_DISCONNECT) {
 		p.server.logger.Warning("%s attempted DISCONNECTPLAYER without permission", p.accountName)
-		buf2 := NewBuffer()
-		buf2.WriteByte(PLO_RC_CHAT)
-		buf2.WriteString8("Server: " + p.accountName + " is not authorized to disconnect players.")
-		p.send(buf2)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: " + p.accountName + " is not authorized to disconnect players.")))
 		return true
 	}
 	reason := buf.ReadGString()
@@ -4442,10 +4463,7 @@ func (p *Player) msgPLI_RC_DISCONNECTPLAYER(packet []byte) bool {
 		disconnectMessage += "."
 		p.server.logger.Info("%s disconnected %s", p.accountName, targetPlayer.accountName)
 	}
-	buf2 := NewBuffer()
-	buf2.WriteByte(PLO_RC_CHAT)
-	buf2.WriteString8(p.accountName + " disconnected " + targetPlayer.accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, buf2.Bytes())
+	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" disconnected "+targetPlayer.accountName))
 	targetPlayer.sendPacket([]byte{PLO_DISCMESSAGE, 0})
 	targetPlayer.writeString8(disconnectMessage)
 	p.server.removePlayer(targetPlayer)
@@ -4462,10 +4480,7 @@ func (p *Player) msgPLI_RC_ADMINMESSAGE(packet []byte) bool {
 	}
 	if !p.hasRight(PLPERM_ADMINMSG) {
 		p.server.logger.Warning("%s attempted ADMINMESSAGE without permission", p.accountName)
-		buf := NewBuffer()
-		buf.WriteByte(PLO_RC_CHAT)
-		buf.WriteString8("Server: You are not authorized to send an admin message.")
-		p.send(buf)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to send an admin message.")))
 		return true
 	}
 	buf := NewBufferFromBytes(packet)
@@ -4484,10 +4499,7 @@ func (p *Player) msgPLI_RC_PRIVADMINMESSAGE(packet []byte) bool {
 	}
 	if !p.hasRight(PLPERM_ADMINMSG) {
 		p.server.logger.Warning("%s attempted PRIVADMINMESSAGE without permission", p.accountName)
-		buf := NewBuffer()
-		buf.WriteByte(PLO_RC_CHAT)
-		buf.WriteString8("Server: You are not authorized to send an admin message.")
-		p.send(buf)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to send an admin message.")))
 		return true
 	}
 	buf := NewBufferFromBytes(packet)
@@ -4541,10 +4553,7 @@ func (p *Player) msgPLI_RC_SERVERFLAGSSET(packet []byte) bool {
 	}
 	if !p.hasRight(PLPERM_SETSERVERFLAGS) {
 		p.server.logger.Warning("%s attempted SERVERFLAGSSET without permission", p.accountName)
-		buf := NewBuffer()
-		buf.WriteByte(PLO_RC_CHAT)
-		buf.WriteString8("Server: You are not authorized to set the server flags.")
-		p.send(buf)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to set the server flags.")))
 		return true
 	}
 	buf := NewBufferFromBytes(packet)
@@ -4591,10 +4600,7 @@ func (p *Player) msgPLI_RC_SERVERFLAGSSET(packet []byte) bool {
 	}
 	p.server.saveFlags()
 	p.server.logger.Info("%s has updated the server flags.", p.accountName)
-	buf3 := NewBuffer()
-	buf3.WriteByte(PLO_RC_CHAT)
-	buf3.WriteString8(p.accountName + " has updated the server flags.")
-	p.server.sendPacketToType(PLTYPE_ANYRC, buf3.Bytes())
+	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has updated the server flags."))
 	return true
 }
 func (p *Player) msgPLI_RC_ACCOUNTADD(packet []byte) bool {
@@ -4604,10 +4610,7 @@ func (p *Player) msgPLI_RC_ACCOUNTADD(packet []byte) bool {
 	}
 	if !p.hasRight(PLPERM_MODIFYSTAFFACCOUNT) {
 		p.server.logger.Warning("%s attempted ACCOUNTADD without permission", p.accountName)
-		buf := NewBuffer()
-		buf.WriteByte(PLO_RC_CHAT)
-		buf.WriteString8("Server: You are not authorized to create new accounts.")
-		p.send(buf)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to create new accounts.")))
 		return true
 	}
 	buf := NewBufferFromBytes(packet)
@@ -4624,10 +4627,7 @@ func (p *Player) msgPLI_RC_ACCOUNTADD(packet []byte) bool {
 	account.isLoadOnly = loadOnly
 	account.SaveAccount()
 	p.server.logger.Info("%s has created a new account: %s", p.accountName, accountName)
-	buf2 := NewBuffer()
-	buf2.WriteByte(PLO_RC_CHAT)
-	buf2.WriteString8(p.accountName + " has created a new account: " + accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, buf2.Bytes())
+	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has created a new account: "+accountName))
 	return true
 }
 func (p *Player) msgPLI_RC_ACCOUNTDEL(packet []byte) bool {
@@ -4637,10 +4637,7 @@ func (p *Player) msgPLI_RC_ACCOUNTDEL(packet []byte) bool {
 	}
 	if !p.hasRight(PLPERM_MODIFYSTAFFACCOUNT) {
 		p.server.logger.Warning("%s attempted ACCOUNTDEL without permission", p.accountName)
-		buf := NewBuffer()
-		buf.WriteByte(PLO_RC_CHAT)
-		buf.WriteString8("Server: You are not authorized to delete accounts.")
-		p.send(buf)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to delete accounts.")))
 		return true
 	}
 	buf := NewBufferFromBytes(packet)
@@ -4655,10 +4652,7 @@ func (p *Player) msgPLI_RC_ACCOUNTDEL(packet []byte) bool {
 		return true
 	}
 	if accountName == "defaultaccount" {
-		buf2 := NewBuffer()
-		buf2.WriteByte(PLO_RC_CHAT)
-		buf2.WriteString8("Server: You are not allowed to delete the default account.")
-		p.send(buf2)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not allowed to delete the default account.")))
 		return true
 	}
 	accountPath := "accounts/" + accountName + ".txt"
@@ -4667,10 +4661,7 @@ func (p *Player) msgPLI_RC_ACCOUNTDEL(packet []byte) bool {
 		return true
 	}
 	p.server.logger.Info("%s has deleted the account: %s", p.accountName, accountName)
-	buf3 := NewBuffer()
-	buf3.WriteByte(PLO_RC_CHAT)
-	buf3.WriteString8(p.accountName + " has deleted the account: " + accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, buf3.Bytes())
+	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has deleted the account: "+accountName))
 	return true
 }
 func (p *Player) msgPLI_RC_ACCOUNTLISTGET(packet []byte) bool {
@@ -4717,8 +4708,7 @@ func (p *Player) msgPLI_RC_PLAYERPROPSGET2(packet []byte) bool {
 		return true
 	}
 	if !p.hasRight(PLPERM_VIEWATTRIBUTES) {
-		p.sendPacket([]byte{PLO_RC_CHAT, 0})
-		p.writeString8("Server: You are not authorized to view player props.")
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to view player props.")))
 		return true
 	}
 	buf2 := NewBuffer()
@@ -4754,8 +4744,7 @@ func (p *Player) msgPLI_RC_PLAYERPROPSGET3(packet []byte) bool {
 		return true
 	}
 	if !p.hasRight(PLPERM_VIEWATTRIBUTES) {
-		p.sendPacket([]byte{PLO_RC_CHAT, 0})
-		p.writeString8("Server: You are not authorized to view player props.")
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to view player props.")))
 		return true
 	}
 	buf2 := NewBuffer()
@@ -4780,8 +4769,7 @@ func (p *Player) msgPLI_RC_PLAYERPROPSRESET(packet []byte) bool {
 		return true
 	}
 	if !p.hasRight(PLPERM_RESETATTRIBUTES) {
-		p.sendPacket([]byte{PLO_RC_CHAT, 0})
-		p.writeString8("Server: You are not authorized to reset accounts.")
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to reset accounts.")))
 		return true
 	}
 	targetPlayer := p.server.getPlayerByAccount(accountName, PLTYPE_ANYCLIENT)
@@ -4792,10 +4780,7 @@ func (p *Player) msgPLI_RC_PLAYERPROPSRESET(packet []byte) bool {
 		accountPath := "accounts/" + accountName + ".txt"
 		os.Remove(accountPath)
 		p.server.logger.Info("%s reset account: %s", p.accountName, accountName)
-		buf2 := NewBuffer()
-		buf2.WriteByte(PLO_RC_CHAT)
-		buf2.WriteString8(p.accountName + " has reset the attributes of account: " + accountName)
-		p.server.sendPacketToType(PLTYPE_ANYRC, buf2.Bytes())
+		p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has reset the attributes of account: "+accountName))
 		return true
 	}
 	targetPlayer.resetAccount()
@@ -4806,10 +4791,7 @@ func (p *Player) msgPLI_RC_PLAYERPROPSRESET(packet []byte) bool {
 		p.server.removePlayer(targetPlayer)
 	}
 	p.server.logger.Info("%s reset account: %s", p.accountName, accountName)
-	buf2 := NewBuffer()
-	buf2.WriteByte(PLO_RC_CHAT)
-	buf2.WriteString8(p.accountName + " has reset the attributes of account: " + accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, buf2.Bytes())
+	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has reset the attributes of account: "+accountName))
 	return true
 }
 func (p *Player) msgPLI_RC_PLAYERPROPSSET2(packet []byte) bool {
@@ -4834,8 +4816,7 @@ func (p *Player) msgPLI_RC_PLAYERPROPSSET2(packet []byte) bool {
 		return true
 	}
 	if !p.hasRight(PLPERM_MODIFYSTAFFACCOUNT) && targetPlayer.isStaff {
-		p.sendPacket([]byte{PLO_RC_CHAT, 0})
-		p.writeString8("Server: You are not authorized to modify staff accounts.")
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to modify staff accounts.")))
 		return true
 	}
 	props := buf.ReadBytes(buf.Remaining())
@@ -4908,10 +4889,7 @@ func (p *Player) msgPLI_RC_ACCOUNTSET(packet []byte) bool {
 	}
 	if !p.hasRight(PLPERM_MODIFYSTAFFACCOUNT) {
 		p.server.logger.Warning("%s attempted ACCOUNTSET without permission", p.accountName)
-		buf2 := NewBuffer()
-		buf2.WriteByte(PLO_RC_CHAT)
-		buf2.WriteString8("Server: You are not authorized to edit accounts.")
-		p.send(buf2)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to edit accounts.")))
 		return true
 	}
 	passwordLen := buf.ReadByte()
@@ -4944,10 +4922,7 @@ func (p *Player) msgPLI_RC_ACCOUNTSET(packet []byte) bool {
 	}
 	targetPlayer.SaveAccount()
 	p.server.logger.Info("%s modified account: %s", p.accountName, accountName)
-	buf2 := NewBuffer()
-	buf2.WriteByte(PLO_RC_CHAT)
-	buf2.WriteString8(p.accountName + " modified the account " + accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, buf2.Bytes())
+	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" modified the account "+accountName))
 	return true
 }
 func (p *Player) msgPLI_RC_CHAT(packet []byte) bool {
@@ -4956,9 +4931,7 @@ func (p *Player) msgPLI_RC_CHAT(packet []byte) bool {
 	}
 	message := string(packet[1:])
 	p.server.logger.Info("RC CHAT: %s", message)
-	buf := NewBuffer()
-	buf.WriteByte(PLO_RC_CHAT).WriteString8(p.accountName + ": " + message)
-	p.server.sendPacketToType(PLTYPE_ANYRC, buf.Bytes())
+	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+": "+message))
 	return true
 }
 func (p *Player) msgPLI_PROFILEGET(packet []byte) bool {
@@ -4976,10 +4949,7 @@ func (p *Player) msgPLI_RC_WARPPLAYER(packet []byte) bool {
 	}
 	if !p.hasRight(PLPERM_WARPTOPLAYER) {
 		p.server.logger.Warning("%s attempted WARPPLAYER without permission", p.accountName)
-		buf := NewBuffer()
-		buf.WriteByte(PLO_RC_CHAT)
-		buf.WriteString8("Server: You are not authorized to warp players.")
-		p.send(buf)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to warp players.")))
 		return true
 	}
 	buf := NewBufferFromBytes(packet)
@@ -5010,10 +4980,7 @@ func (p *Player) msgPLI_RC_PLAYERRIGHTSGET(packet []byte) bool {
 	}
 	if accountName != p.accountName && !p.hasRight(PLPERM_SETRIGHTS) {
 		p.server.logger.Warning("%s attempted PLAYERRIGHTSGET without permission", p.accountName)
-		buf2 := NewBuffer()
-		buf2.WriteByte(PLO_RC_CHAT)
-		buf2.WriteString8("Server: You are not authorized to view that player's rights.")
-		p.send(buf2)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to view that player's rights.")))
 		return true
 	}
 	targetPlayer := p.server.getPlayerByAccount(accountName, PLTYPE_ANYCLIENT)
@@ -5058,10 +5025,7 @@ func (p *Player) msgPLI_RC_PLAYERRIGHTSSET(packet []byte) bool {
 	}
 	if !p.hasRight(PLPERM_SETRIGHTS) {
 		p.server.logger.Warning("%s attempted PLAYERRIGHTSSET without permission", p.accountName)
-		buf2 := NewBuffer()
-		buf2.WriteByte(PLO_RC_CHAT)
-		buf2.WriteString8("Server: You are not authorized to set player rights.")
-		p.send(buf2)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to set player rights.")))
 		return true
 	}
 	targetPlayer := p.server.getPlayerByAccount(accountName, PLTYPE_ANYCLIENT)
@@ -5111,10 +5075,7 @@ func (p *Player) msgPLI_RC_PLAYERRIGHTSSET(packet []byte) bool {
 	targetPlayer.folderList = validFolders
 	targetPlayer.SaveAccount()
 	p.server.logger.Info("%s set rights for account: %s", p.accountName, accountName)
-	buf2 := NewBuffer()
-	buf2.WriteByte(PLO_RC_CHAT)
-	buf2.WriteString8(p.accountName + " has set the rights of " + accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, buf2.Bytes())
+	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has set the rights of "+accountName))
 	return true
 }
 func (p *Player) msgPLI_RC_PLAYERCOMMENTSGET(packet []byte) bool {
@@ -5155,10 +5116,7 @@ func (p *Player) msgPLI_RC_PLAYERCOMMENTSSET(packet []byte) bool {
 	}
 	if !p.hasRight(PLPERM_SETCOMMENTS) {
 		p.server.logger.Warning("%s attempted PLAYERCOMMENTSSET without permission", p.accountName)
-		buf := NewBuffer()
-		buf.WriteByte(PLO_RC_CHAT)
-		buf.WriteString8("Server: You are not authorized to set player comments.")
-		p.send(buf)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to set player comments.")))
 		return true
 	}
 	buf := NewBufferFromBytes(packet)
@@ -5188,10 +5146,7 @@ func (p *Player) msgPLI_RC_PLAYERCOMMENTSSET(packet []byte) bool {
 		rcPlayer.LoadAccount(accountName, false)
 	}
 	p.server.logger.Info("%s has set the comments of %s", p.accountName, accountName)
-	buf2 := NewBuffer()
-	buf2.WriteByte(PLO_RC_CHAT)
-	buf2.WriteString8(p.accountName + " has set the comments of " + accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, buf2.Bytes())
+	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has set the comments of "+accountName))
 	return true
 }
 func (p *Player) msgPLI_RC_PLAYERBANGET(packet []byte) bool {
@@ -5246,10 +5201,7 @@ func (p *Player) msgPLI_RC_PLAYERBANSET(packet []byte) bool {
 	}
 	if !p.hasRight(PLPERM_BAN) {
 		p.server.logger.Warning("%s attempted PLAYERBANSET without permission", p.accountName)
-		buf2 := NewBuffer()
-		buf2.WriteByte(PLO_RC_CHAT)
-		buf2.WriteString8("Server: You are not authorized to set player bans.")
-		p.send(buf2)
+		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to set player bans.")))
 		return true
 	}
 	targetPlayer := p.server.getPlayerByAccount(accountName, PLTYPE_ANYCLIENT)
@@ -5269,10 +5221,7 @@ func (p *Player) msgPLI_RC_PLAYERBANSET(packet []byte) bool {
 	targetPlayer.banReason = reason
 	targetPlayer.SaveAccount()
 	p.server.logger.Info("%s set ban for account: %s (banned=%v)", p.accountName, accountName, banned)
-	buf2 := NewBuffer()
-	buf2.WriteByte(PLO_RC_CHAT)
-	buf2.WriteString8(p.accountName + " has set the ban of " + accountName)
-	p.server.sendPacketToType(PLTYPE_ANYRC, buf2.Bytes())
+	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(p.accountName+" has set the ban of "+accountName))
 	if banned && targetPlayer.id != 0 {
 		targetPlayer.sendPacket([]byte{PLO_DISCMESSAGE, 0})
 		targetPlayer.writeString8(p.accountName + " has banned you.  Reason: " + reason)
@@ -9020,10 +8969,7 @@ WordFilterActions:
 	}
 
 	if wf.showWordsToRC || actionsFound&FILTER_ACTION_TELLRC != 0 {
-		buf := NewBuffer()
-		buf.WriteByte(PLO_RC_CHAT)
-		buf.WriteString8(fmt.Sprintf("Word Filter: Player %s was caught using these words: %s", player.accountName, badwords))
-		wf.server.sendPacketToType(PLTYPE_RC, buf.Bytes())
+		wf.server.sendPacketToType(PLTYPE_RC, rcChatPacket(fmt.Sprintf("Word Filter: Player %s was caught using these words: %s", player.accountName, badwords)))
 	}
 
 	if actionsFound&FILTER_ACTION_WARN != 0 {

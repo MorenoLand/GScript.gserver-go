@@ -133,8 +133,10 @@ func TestRCLoginPayloadUsesChatForWelcomeMessages(t *testing.T) {
 	if bytes.Contains(rc.outQueue, []byte{PLO_RC_ADMINMESSAGE + 32}) {
 		t.Fatalf("rc login payload used admin-message packet: % X", rc.outQueue)
 	}
-	wantWelcome := append([]byte{PLO_RC_CHAT + 32}, NewBuffer().WriteString8("Welcome").Bytes()...)
-	wantHelp := append([]byte{PLO_RC_CHAT + 32}, NewBuffer().WriteString8("Say /help").Bytes()...)
+	wantWelcome := append([]byte{PLO_RC_CHAT + 32}, []byte("Welcome")...)
+	wantWelcome = append(wantWelcome, '\n')
+	wantHelp := append([]byte{PLO_RC_CHAT + 32}, []byte("Say /help")...)
+	wantHelp = append(wantHelp, '\n')
 	if !bytes.Contains(rc.outQueue, wantWelcome) || !bytes.Contains(rc.outQueue, wantHelp) {
 		t.Fatalf("rc login payload missing chat welcome messages: % X", rc.outQueue)
 	}
@@ -152,10 +154,54 @@ func TestRCChatRelaysToConnectedRCs(t *testing.T) {
 
 	rc.msgPLI_RC_CHAT([]byte{PLI_RC_CHAT, 'o', 'h'})
 
-	wantPayload := NewBuffer().WriteByte(PLO_RC_CHAT).WriteString8("Admin: oh").Bytes()
-	want := append([]byte{PLO_RC_CHAT + 32}, wantPayload[1:]...)
+	want := append([]byte{PLO_RC_CHAT + 32}, []byte("Admin: oh")...)
 	if !bytes.Equal(rc.outQueue, want) {
 		t.Fatalf("rc chat packet = % X, want % X", rc.outQueue, want)
+	}
+}
+
+func TestRCServerOptionsGetSendsReadableRawConfig(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.settings.Set("name", "Orion-Go")
+	server.settings.Set("staff", "(Manager),moondeath")
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	rc.msgPLI_RC_SERVEROPTIONSGET([]byte{PLI_RC_SERVEROPTIONSGET})
+
+	if !bytes.HasPrefix(rc.outQueue, []byte{PLO_RC_SERVEROPTIONSGET + 32}) {
+		t.Fatalf("serveroptions packet id = % X", rc.outQueue)
+	}
+	if bytes.Contains(rc.outQueue, []byte{1}) {
+		t.Fatalf("serveroptions payload contained control separators: % X", rc.outQueue)
+	}
+	if !bytes.Contains(rc.outQueue, []byte("name=Orion-Go\n")) || !bytes.Contains(rc.outQueue, []byte("staff=(Manager),moondeath\n")) {
+		t.Fatalf("serveroptions payload missing readable lines: %q", rc.outQueue)
+	}
+}
+
+func TestRCFolderConfigGetUsesFolderConfigPacketAndRawText(t *testing.T) {
+	server := newLoginTestServer(t)
+	configDir := filepath.Join(server.config.GetBasePath(), "config")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "foldersconfig.txt"), []byte("level *.nw\r\nlevel levels/*.graal\r\n"), 0644); err != nil {
+		t.Fatalf("write foldersconfig: %v", err)
+	}
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	rc.msgPLI_RC_FOLDERCONFIGGET([]byte{PLI_RC_FOLDERCONFIGGET})
+
+	want := append([]byte{PLO_RC_FOLDERCONFIGGET + 32}, []byte("level *.nw\nlevel levels/*.graal\n")...)
+	want = append(want, '\n')
+	if !bytes.Equal(rc.outQueue, want) {
+		t.Fatalf("folderconfig packet = % X, want % X", rc.outQueue, want)
 	}
 }
 
@@ -198,6 +244,38 @@ func TestAccountIPFromRemoteAddress(t *testing.T) {
 	}
 	if got := accountIPFromAddr(fakeAddr("not an ip")); got != 0 {
 		t.Fatalf("non-IP addr = %d, want 0", got)
+	}
+}
+
+func TestRCLoginAppliesServerOptionsStaffRights(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.settings.Set("staff", "(Manager),moondeath")
+	account := "" +
+		"GRACC001\n" +
+		"NICK moondeath\n" +
+		"LOCALRIGHTS 0\n" +
+		"IPRANGE 0.0.0.0\n" +
+		"LEVEL onlinestartlocal.nw\n" +
+		"X 4\n" +
+		"Y 4\n"
+	if err := os.WriteFile(filepath.Join(server.config.GetBasePath(), "accounts", "moondeath.txt"), []byte(account), 0644); err != nil {
+		t.Fatalf("write account: %v", err)
+	}
+	p := NewPlayer(nil, server)
+
+	if !p.handleLogin(buildLoginPacket(t, 6, 42, "G3D0311C", "moondeath", "pass", "win,test,6.037")) {
+		t.Fatalf("RC2 login was rejected")
+	}
+
+	wantRights := (PLPERM_NPCCONTROL << 1) - 1
+	if p.adminRights != wantRights {
+		t.Fatalf("adminRights = %d, want %d", p.adminRights, wantRights)
+	}
+	if !p.isStaff {
+		t.Fatalf("staff-listed account was not marked staff")
+	}
+	if p.adminIp != "*.*.*.*" {
+		t.Fatalf("adminIp = %q, want wildcard", p.adminIp)
 	}
 }
 
