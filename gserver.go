@@ -271,7 +271,7 @@ func (s *Server) fiveMinuteEvents() {
 
 func (s *Server) savePlayerAccounts() {
 	for _, player := range s.GetAllPlayers() {
-		if player != nil && player.isLoggedIn() {
+		if player != nil && player.shouldSavePlayerAccount() {
 			player.SaveAccount()
 			player.lastSave = time.Now()
 		}
@@ -927,7 +927,7 @@ type Account struct {
 	eloRating, eloDeviation                                                                      float32
 	maxHitpoints, mp, apCounter, horseBombCount                                                  uint8
 	kills, deaths, additionalFlags, rupees                                                       uint32
-	carrySprite                                                                                  int8
+	carrySprite                                                                                  byte
 	onlineTime, status, udpport                                                                  int
 	lastSparTime                                                                                 time.Time
 	attachNPC                                                                                    uint32
@@ -1298,6 +1298,7 @@ func NewPlayer(conn net.Conn, s *Server) *Player {
 	p.lastMessage = time.Time{}
 	p.x = 60
 	p.y = 61
+	p.carrySprite = 0xff
 	p.alignment = 50
 	return p
 }
@@ -2241,7 +2242,7 @@ func (p *Player) disconnect() {
 	level := p.currentLevel
 	p.currentLevel = nil
 	server := p.server
-	shouldSave := p.isLoggedIn()
+	shouldSave := p.shouldSavePlayerAccount()
 	p.mu.Unlock()
 
 	if shouldSave {
@@ -2970,6 +2971,9 @@ func (p *Player) setAccountName(v string) { p.accountName = v }
 func (p *Player) getAccountName() string  { return p.accountName }
 func (p *Player) getType() int            { return p.playerType }
 func (p *Player) isLoggedIn() bool        { return p.playerType != PLTYPE_AWAIT && p.id > 0 }
+func (p *Player) shouldSavePlayerAccount() bool {
+	return p.isLoggedIn() && p.playerType&PLTYPE_ANYCLIENT != 0
+}
 func (p *Player) addWeapon(weaponName string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -3167,7 +3171,7 @@ func (p *Player) getProp(propId int) []byte {
 	case PLPROP_STATUS:
 		buf.WriteGChar(byte(p.status))
 	case PLPROP_CARRYSPRITE:
-		buf.WriteGChar(byte(p.carrySprite))
+		buf.WriteByte(p.carrySprite)
 	case PLPROP_CURLEVEL:
 		buf.WriteGChar(byte(len(p.levelName)))
 		buf.data = append(buf.data, p.levelName...)
@@ -3383,7 +3387,7 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 		case PLPROP_STATUS:
 			p.status = int(buf.ReadGChar())
 		case PLPROP_CARRYSPRITE:
-			p.carrySprite = int8(buf.ReadGChar())
+			p.carrySprite = buf.ReadByte()
 		case PLPROP_HORSEGIF:
 			p.character.horseImage = buf.ReadGCharString()
 		case PLPROP_HORSEBUSHES:

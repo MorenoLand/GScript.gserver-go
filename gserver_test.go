@@ -715,6 +715,17 @@ func TestLoginPropsMatchReferenceByOmittingNickname(t *testing.T) {
 	}
 }
 
+func TestNewPlayerDefaultsCarrySpriteToNone(t *testing.T) {
+	p := NewPlayer(nil, &Server{logger: NewLogger("", false)})
+
+	if p.carrySprite != 0xff {
+		t.Fatalf("carrySprite = 0x%02X, want 0xFF", p.carrySprite)
+	}
+	if got := p.getProp(PLPROP_CARRYSPRITE); !bytes.Equal(got, []byte{0xff}) {
+		t.Fatalf("carry sprite prop = % X, want FF", got)
+	}
+}
+
 func TestLoadAccountParsesDecimalAndRepairsInvalidHealth(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.MkdirAll(dir+"\\accounts", 0755); err != nil {
@@ -815,6 +826,30 @@ func TestOneMinuteEventsSavesMovedPlayerAccount(t *testing.T) {
 		if !bytes.Contains(data, []byte(want)) {
 			t.Fatalf("saved account missing %q:\n%s", want, data)
 		}
+	}
+}
+
+func TestOneMinuteEventsDoesNotSaveNpcServerAccount(t *testing.T) {
+	dir := t.TempDir()
+	server := &Server{
+		logger:  NewLogger("", false),
+		config:  NewFileSystem(dir),
+		players: make(map[uint16]*Player),
+	}
+	p := &Player{
+		id:         1,
+		server:     server,
+		playerType: PLTYPE_NPCSERVER,
+	}
+	p.setServer(server)
+	p.accountName = "(npcserver)"
+	p.communityName = "(npcserver)"
+	server.players[p.id] = p
+
+	server.oneMinuteEvents()
+
+	if _, err := os.Stat(dir + "\\accounts\\(npcserver).txt"); !os.IsNotExist(err) {
+		t.Fatalf("npcserver account save err = %v, want file to not exist", err)
 	}
 }
 
@@ -1699,6 +1734,59 @@ func TestPlayerPropsForwardsChangedPropsToOtherPlayers(t *testing.T) {
 
 	if string(got) != string(want) {
 		t.Fatalf("other player prop delta = % X, want % X", got, want)
+	}
+}
+
+func TestPlayerPropsForwardsCarrySpriteAsRawByte(t *testing.T) {
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	server := &Server{
+		logger:  NewLogger("", false),
+		players: make(map[uint16]*Player),
+		levels:  map[string]*Level{"onlinestartlocal.nw": level},
+	}
+	p := &Player{
+		id:           1,
+		server:       server,
+		currentLevel: level,
+		playerType:   PLTYPE_CLIENT3,
+		loaded:       true,
+	}
+	p.levelName = "onlinestartlocal.nw"
+	other := &Player{
+		id:            2,
+		server:        server,
+		currentLevel:  level,
+		playerType:    PLTYPE_CLIENT3,
+		queueOutgoing: true,
+	}
+	other.conn, _ = net.Pipe()
+	defer other.conn.Close()
+	server.players[p.id] = p
+	server.players[other.id] = other
+	level.players = []uint16{p.id, other.id}
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_CARRYSPRITE)
+	packet.WriteByte(0x02)
+
+	if !p.msgPLI_PLAYERPROPS(packet.Bytes()) {
+		t.Fatalf("msgPLI_PLAYERPROPS returned false")
+	}
+	if p.carrySprite != 0x02 {
+		t.Fatalf("carrySprite = 0x%02X, want 02", p.carrySprite)
+	}
+
+	id := NewBuffer()
+	id.WriteGShort(p.id)
+	want := append([]byte{PLO_OTHERPLPROPS + 32}, id.Bytes()...)
+	want = append(want, PLPROP_CARRYSPRITE+32, 0x02, '\n')
+	if !bytes.Contains(other.outQueue, want) {
+		t.Fatalf("observer carry sprite packet missing % X in % X", want, other.outQueue)
+	}
+	if bytes.Contains(other.outQueue, []byte{PLPROP_CARRYSPRITE + 32, 0x22}) {
+		t.Fatalf("carry sprite was GChar encoded in % X", other.outQueue)
 	}
 }
 
