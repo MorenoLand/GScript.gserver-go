@@ -216,7 +216,9 @@ func (n *NPCServer) newNPCPlayer() *Player {
 		if nickName == "" {
 			nickName = "NPC-Server"
 		}
-		p.character.nickName = nickName + " (Server)"
+		p.setNickname(nickName + " (Server)")
+	} else {
+		p.setNickname(p.character.nickName)
 	}
 	now := time.Now()
 	p.lastData = now

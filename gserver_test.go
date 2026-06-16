@@ -146,6 +146,22 @@ func TestNPCServerLoadsPseudoPlayerAccount(t *testing.T) {
 	}
 }
 
+func TestNPCServerUsesServerStaffGuild(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.settings.Set("serverside", "true")
+	server.settings.Set("staffguilds", "Server,Manager,Owner")
+
+	server.initNPCServer()
+
+	npc := server.GetPlayer(1)
+	if npc == nil {
+		t.Fatal("npc-server was not initialized")
+	}
+	if got := npc.guild; got != "Server" {
+		t.Fatalf("npc-server guild = %q, want Server", got)
+	}
+}
+
 func TestLoadNpcsLoadsControlNPCWithSavedID(t *testing.T) {
 	server := newLoginTestServer(t)
 	writeTestFile(t, server.config.GetBasePath(), "npcs/npcControl-NPC.txt", ""+
@@ -382,6 +398,57 @@ func TestRCChatRelaysToConnectedRCs(t *testing.T) {
 	want = append(want, '\n')
 	if !bytes.Equal(rc.outQueue, want) {
 		t.Fatalf("rc chat packet = % X, want % X", rc.outQueue, want)
+	}
+}
+
+func TestRCChatSlashHelpDoesNotEchoAsChat(t *testing.T) {
+	server := newLoginTestServer(t)
+	writeTestFile(t, server.config.GetBasePath(), "config/rchelp.txt", "/open account\n/openrights account\n")
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.id = 2
+	rc.accountName = "Admin"
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[rc.id] = rc
+
+	rc.msgPLI_RC_CHAT(append([]byte{PLI_RC_CHAT}, []byte("/help")...))
+
+	if bytes.Contains(rc.outQueue, []byte("Admin: /help")) {
+		t.Fatalf("slash command was echoed to RC chat: % X", rc.outQueue)
+	}
+	if !bytes.Contains(rc.outQueue, []byte("/open account")) || !bytes.Contains(rc.outQueue, []byte("/openrights account")) {
+		t.Fatalf("help command did not send rchelp lines: % X", rc.outQueue)
+	}
+}
+
+func TestRCChatOpenRightsDispatchesCommand(t *testing.T) {
+	server := newLoginTestServer(t)
+	target := NewPlayer(nil, server)
+	target.playerType = PLTYPE_CLIENT3
+	target.id = 3
+	target.accountName = "moondeath"
+	target.adminIp = "*.*.*.*"
+	server.players[target.id] = target
+
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.id = 2
+	rc.accountName = "Admin"
+	rc.adminRights = PLPERM_SETRIGHTS
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[rc.id] = rc
+
+	rc.msgPLI_RC_CHAT(append([]byte{PLI_RC_CHAT}, []byte("/openrights moondeath")...))
+
+	if bytes.Contains(rc.outQueue, []byte("Admin: /openrights moondeath")) {
+		t.Fatalf("openrights command was echoed to RC chat: % X", rc.outQueue)
+	}
+	want := append([]byte{PLO_RC_PLAYERRIGHTSGET + 32}, []byte{byte(len("moondeath"))}...)
+	want = append(want, []byte("moondeath")...)
+	if !bytes.Contains(rc.outQueue, want) {
+		t.Fatalf("openrights did not dispatch rights packet: % X, want prefix % X", rc.outQueue, want)
 	}
 }
 

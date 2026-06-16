@@ -177,14 +177,16 @@ connection into a level. RC2 uses the same keyed GEN_5 framing as CLIENT3. The R
 tail should stay control-oriented, such as `PLO_RC_MAXUPLOADFILESIZE` and
 `PLO_RC_CHAT` welcome/status lines, followed by a one-way player list from online game clients to the RC.
 RC/RC2 connections are not iterable world players: do not send them to game clients as
-`PLO_ADDPLAYER`/`PLO_OTHERPLPROPS`, and do not report them to the listserver with
-`SVO_PLYRADD`. Only real game clients and the pseudo `(npcserver)` player belong in
-listserver player rows.
+physical level occupants. They should still be visible in player lists/listserver player
+rows unless a server option explicitly hides staff. The pseudo `(npcserver)` player is
+always listed and should never be hidden by staff visibility options.
 `PLO_RC_ADMINMESSAGE` and `PLO_RC_CHAT` carry raw text after the packet id. Do not encode
 either as a GString or String8; RC clients display those length bytes as stray characters.
 Avoid `PLO_RC_ADMINMESSAGE` for normal RC login/status text because clients label it as an
 admin message. `PLO_RC_CHAT` should be used for RC login/status text and relayed back to
-connected RCs as raw text.
+connected RCs as raw text. If an RC chat message begins with `/`, treat it as an internal
+RC command and do not relay it as chat. Known commands include `/help`, `/open`,
+`/openacc`, `/opencomments`, `/openban`, `/openrights`, and `/reset`.
 
 ---
 

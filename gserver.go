@@ -3461,12 +3461,18 @@ func (p *Player) loginWarpTarget() (string, float64, float64) {
 	return levelName, 32, 32
 }
 
-func (p *Player) getId() uint16           { return p.id }
-func (p *Player) setId(id uint16)         { p.id = id }
-func (p *Player) setX(v float32)          { p.Account.x = int16(v * 16) }
-func (p *Player) setY(v float32)          { p.Account.y = int16(v * 16) }
-func (p *Player) setSprite(v string)      { p.character.bodyImage = v }
-func (p *Player) setNickname(v string)    { p.character.nickName = v }
+func (p *Player) getId() uint16      { return p.id }
+func (p *Player) setId(id uint16)    { p.id = id }
+func (p *Player) setX(v float32)     { p.Account.x = int16(v * 16) }
+func (p *Player) setY(v float32)     { p.Account.y = int16(v * 16) }
+func (p *Player) setSprite(v string) { p.character.bodyImage = v }
+func (p *Player) setNickname(v string) {
+	if len(v) > 223 {
+		v = v[:223]
+	}
+	p.character.nickName = v
+	p.guild = parseNicknameGuild(v)
+}
 func (p *Player) setAccountName(v string) { p.accountName = v }
 func (p *Player) getAccountName() string  { return p.accountName }
 func (p *Player) getType() int            { return p.playerType }
@@ -3474,6 +3480,21 @@ func (p *Player) isLoggedIn() bool        { return p.playerType != PLTYPE_AWAIT 
 func (p *Player) shouldSavePlayerAccount() bool {
 	return p.isLoggedIn() && p.playerType&PLTYPE_ANYCLIENT != 0
 }
+
+func parseNicknameGuild(nickname string) string {
+	start := strings.Index(nickname, "(")
+	if start < 0 {
+		return ""
+	}
+	end := strings.Index(nickname[start+1:], ")")
+	if end < 0 {
+		end = len(nickname)
+	} else {
+		end = start + 1 + end
+	}
+	return strings.TrimSpace(nickname[start+1 : end])
+}
+
 func (p *Player) addWeapon(weaponName string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -5325,10 +5346,81 @@ func (p *Player) msgPLI_RC_CHAT(packet []byte) bool {
 	if len(packet) <= 1 {
 		return true
 	}
-	message := string(packet[1:])
+	if p.playerType&PLTYPE_ANYCLIENT != 0 {
+		p.server.logger.Warning("[Hack] %s attempted RC_CHAT (non-RC)", p.accountName)
+		return true
+	}
+	if p.playerType&PLTYPE_ANYNC != 0 {
+		return true
+	}
+	message := strings.TrimSpace(string(packet[1:]))
+	if message == "" {
+		return true
+	}
 	p.server.logger.Info("RC CHAT: %s", message)
+	if strings.HasPrefix(message, "/") {
+		return p.handleRCCommand(message)
+	}
 	p.server.sendRCChat(p.accountName + ": " + message)
 	return true
+}
+
+func (p *Player) handleRCCommand(message string) bool {
+	words := strings.Fields(message)
+	if len(words) == 0 {
+		return true
+	}
+	command := strings.ToLower(words[0])
+	arg := strings.TrimSpace(strings.TrimPrefix(message, words[0]))
+	switch command {
+	case "/help":
+		if len(words) == 1 {
+			p.sendRCHelp()
+		}
+	case "/open":
+		if arg != "" {
+			return p.msgPLI_RC_PLAYERPROPSGET3(rcCommandAccountPacket(arg))
+		}
+	case "/openacc":
+		if arg != "" {
+			return p.msgPLI_RC_ACCOUNTGET(rcCommandAccountPacket(arg))
+		}
+	case "/opencomments":
+		if arg != "" {
+			return p.msgPLI_RC_PLAYERCOMMENTSGET(rcCommandAccountPacket(arg))
+		}
+	case "/openban":
+		if arg != "" {
+			return p.msgPLI_RC_PLAYERBANGET(rcCommandAccountPacket(arg))
+		}
+	case "/openrights":
+		if arg != "" {
+			return p.msgPLI_RC_PLAYERRIGHTSGET(rcCommandAccountPacket(arg))
+		}
+	case "/reset":
+		if arg != "" {
+			return p.msgPLI_RC_PLAYERPROPSRESET(rcCommandAccountPacket(arg))
+		}
+	}
+	return true
+}
+
+func (p *Player) sendRCHelp() {
+	data, err := p.server.config.LoadFile("config/rchelp.txt")
+	if err != nil {
+		p.sendPLO_RC_CHAT("No RC help is available.")
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line != "" {
+			p.sendPLO_RC_CHAT(line)
+		}
+	}
+}
+
+func rcCommandAccountPacket(account string) []byte {
+	return NewBuffer().WriteGString(strings.TrimSpace(account)).Bytes()
 }
 func (p *Player) msgPLI_PROFILEGET(packet []byte) bool {
 	p.server.logger.Debug("PROFILEGET")
