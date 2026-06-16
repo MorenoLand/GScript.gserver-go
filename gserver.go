@@ -2150,7 +2150,7 @@ func (p *Player) handlePacket(packet []byte) bool {
 	default:
 		p.invalidPackets++
 		if p.invalidPackets > 5 {
-			p.server.logger.Warning("Player %s sending invalid packets", p.accountName)
+			p.server.logger.Warning("Player %s sending invalid packet id=%d name=%s bytes=% X", p.accountName, packetId, packetName, packet)
 			return false
 		}
 	}
@@ -6547,16 +6547,29 @@ func (p *Player) msgPLI_REQUESTTEXT(packet []byte) bool {
 	data := rawText
 	data = strings.ReplaceAll(data, "\x01", "\n")
 	parts := strings.SplitN(data, "\n", 4)
-	if len(parts) < 3 {
+	if len(parts) < 2 {
 		return true
 	}
-	weapon := parts[0]
-	type_ := parts[1]
-	option := parts[2]
+	weapon := "GraalEngine"
+	type_ := parts[0]
+	option := parts[1]
+	if parts[0] == "GraalEngine" && len(parts) >= 3 {
+		weapon = parts[0]
+		type_ = parts[1]
+		option = parts[2]
+	}
 	p.server.logger.Debug("REQUESTTEXT: weapon=%s type=%s option=%s raw=%q", weapon, type_, option, rawText)
 	if type_ == "lister" {
 		if option == "simplelist" {
-			p.sendServerTextFields(weapon, type_, "simpleserverlist")
+			if p.server.serverList != nil && p.server.serverList.connected {
+				p.server.serverList.SendPlayerTextPacket(SVO_REQUESTLIST, p.id, strings.Join([]string{weapon, type_, "simpleserverlist"}, "\x01")+"\x01")
+			} else {
+				p.sendServerTextFields(weapon, type_, "simpleserverlist")
+			}
+		} else if option == "rebornlist" {
+			if p.server.serverList != nil && p.server.serverList.connected {
+				p.server.serverList.SendPlayerTextPacket(SVO_REQUESTLIST, p.id, rawText)
+			}
 		} else if option == "subscriptions" {
 			p.sendServerTextFields(weapon, type_, "subscriptions", "unlimited", "Unlimited Subscription", "\"\"")
 		} else if option == "bantypes" {

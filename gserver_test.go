@@ -4824,7 +4824,12 @@ func TestRequestTextForwardsListRequestWithPlayerId(t *testing.T) {
 		t.Fatal("msgPLI_REQUESTTEXT returned false")
 	}
 
-	got := <-sl.sendQueue
+	var got []byte
+	select {
+	case got = <-sl.sendQueue:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for forwarded list request")
+	}
 	want := NewBuffer().
 		WriteGChar(SVO_REQUESTLIST).
 		WriteGShort(321).
@@ -4833,6 +4838,41 @@ func TestRequestTextForwardsListRequestWithPlayerId(t *testing.T) {
 		Bytes()
 	if !bytes.Equal(got, want) {
 		t.Fatalf("forwarded list request = % X, want % X", got, want)
+	}
+}
+
+func TestRequestTextForwardsTwoFieldSimpleListToListserver(t *testing.T) {
+	server := &Server{logger: NewLogger("", false)}
+	sl := &ServerList{
+		server:    server,
+		connected: true,
+		enabled:   true,
+		codec:     ENCRYPT_GEN_1,
+		sendQueue: make(chan []byte, 1),
+	}
+	server.serverList = sl
+	p := &Player{id: 321, server: server}
+
+	request := "lister\x01simplelist\x01"
+	if !p.msgPLI_REQUESTTEXT(append([]byte{PLI_REQUESTTEXT}, []byte(request)...)) {
+		t.Fatal("msgPLI_REQUESTTEXT returned false")
+	}
+
+	forwardedText := "GraalEngine\x01lister\x01simpleserverlist\x01"
+	var got []byte
+	select {
+	case got = <-sl.sendQueue:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for forwarded simplelist request")
+	}
+	want := NewBuffer().
+		WriteGChar(SVO_REQUESTLIST).
+		WriteGShort(321).
+		Write([]byte(forwardedText)).
+		WriteByte('\n').
+		Bytes()
+	if !bytes.Equal(got, want) {
+		t.Fatalf("forwarded simplelist request = % X, want % X", got, want)
 	}
 }
 
