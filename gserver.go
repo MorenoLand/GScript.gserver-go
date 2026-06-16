@@ -177,10 +177,6 @@ func (s *Server) syncNPCServer() {
 	if wantNPCServer {
 		if npcServer == nil {
 			s.initNPCServer()
-			return
-		}
-		if s.serverList != nil && s.serverList.connected {
-			s.serverList.AddPlayer(npcServer)
 		}
 		return
 	}
@@ -736,7 +732,9 @@ func (s *Server) AddPlayer(player *Player, id uint16) bool {
 	player.setId(id)
 	s.players[id] = player
 	s.logger.Info("Player %d added (account: %s)", id, player.getAccountName())
-	s.serverList.AddPlayer(player)
+	if s.serverList != nil && isListserverPlayer(player) {
+		s.serverList.AddPlayer(player)
+	}
 	return true
 }
 
@@ -1870,7 +1868,7 @@ func (p *Player) sendPostLoginTail() {
 		if other.id == p.id {
 			continue
 		}
-		if other.playerType&PLTYPE_NC != 0 {
+		if other.playerType&PLTYPE_ANYCLIENT == 0 {
 			continue
 		}
 		if other.conn == nil {
@@ -8650,21 +8648,26 @@ func (sl *ServerList) sendPlayers() {
 	if !sl.connected {
 		return
 	}
+	sl.server.syncNPCServer()
 	buf := NewBuffer()
 	buf.WriteGChar(SVO_SETPLYR)
 	sl.sendPacket(buf.Bytes())
 	for _, player := range sl.server.players {
-		if player != nil {
+		if isListserverPlayer(player) {
 			sl.server.logger.Debug("[LISTSERVER] Sending player to listserver: id=%d type=%d account=%s nickname=%s level=%s x=%d y=%d", player.id, player.playerType, player.accountName, player.character.nickName, player.levelName, int(player.x), int(player.y))
 			sl.sendPlayerAdd(player)
 		}
 	}
 }
 func (sl *ServerList) AddPlayer(player *Player) {
-	if !sl.connected {
+	if !sl.connected || !isListserverPlayer(player) {
 		return
 	}
 	sl.sendPlayerAdd(player)
+}
+
+func isListserverPlayer(player *Player) bool {
+	return player != nil && (player.playerType&PLTYPE_ANYCLIENT != 0 || player.playerType == PLTYPE_NPCSERVER)
 }
 
 func (sl *ServerList) sendPlayerAdd(player *Player) {

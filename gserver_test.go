@@ -985,6 +985,45 @@ func TestPostLoginTailExchangesAddPlayerAndOtherProps(t *testing.T) {
 	}
 }
 
+func TestPostLoginTailDoesNotSendExistingRCToGameClient(t *testing.T) {
+	server := &Server{
+		logger:   NewLogger("", false),
+		settings: NewSettings(),
+		players:  make(map[uint16]*Player),
+	}
+	p := &Player{
+		id:            2,
+		server:        server,
+		playerType:    PLTYPE_CLIENT3,
+		versionId:     222,
+		queueOutgoing: true,
+	}
+	p.accountName = "Z"
+	p.character.nickName = "Z"
+	p.levelName = "onlinestartlocal.nw"
+	rc := &Player{
+		id:            3,
+		server:        server,
+		playerType:    PLTYPE_RC2,
+		versionId:     222,
+		queueOutgoing: true,
+		loaded:        true,
+	}
+	rc.accountName = "moondeath"
+	rc.character.nickName = "Not Denveous"
+	rc.levelName = "onlinestartlocal.nw"
+	server.players[p.id] = p
+	server.players[rc.id] = rc
+
+	p.sendPostLoginTail()
+
+	rcAdd := append([]byte{PLO_ADDPLAYER + 32}, NewBuffer().WriteGShort(rc.id).Bytes()...)
+	rcProps := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(rc.id).Bytes()...)
+	if bytes.Contains(p.outQueue, rcAdd) || bytes.Contains(p.outQueue, rcProps) {
+		t.Fatalf("game client received RC as level player: % X", p.outQueue)
+	}
+}
+
 func containsTerminatedPacket(stream, prefix []byte) bool {
 	idx := bytes.Index(stream, prefix)
 	if idx < 0 {
@@ -1196,6 +1235,75 @@ func TestServerListSendsAllowedVersionsText(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("allowed versions packet = % X, want % X", got, want)
 	}
+}
+
+func TestServerListDoesNotSendRCPlayers(t *testing.T) {
+	server := &Server{logger: NewLogger("", false)}
+	sl := &ServerList{
+		server:    server,
+		connected: true,
+		sendQueue: make(chan []byte, 1),
+		codec:     ENCRYPT_GEN_1,
+	}
+	rc := &Player{id: 4, playerType: PLTYPE_RC2}
+	rc.accountName = "moondeath"
+	rc.character.nickName = "Not Denveous"
+
+	sl.AddPlayer(rc)
+
+	select {
+	case packet := <-sl.sendQueue:
+		t.Fatalf("RC player was sent to listserver: % X", packet)
+	default:
+	}
+}
+
+func TestServerListSendPlayersIncludesNPCServerButExcludesRC(t *testing.T) {
+	server := &Server{
+		logger:   NewLogger("", false),
+		settings: NewSettings(),
+		players:  make(map[uint16]*Player),
+	}
+	server.settings.Set("serverside", "true")
+	npc := &Player{id: 1, playerType: PLTYPE_NPCSERVER}
+	npc.accountName = "(npcserver)"
+	npc.character.nickName = "NPC-Server (Server)"
+	rc := &Player{id: 4, playerType: PLTYPE_RC2}
+	rc.accountName = "moondeath"
+	rc.character.nickName = "Not Denveous"
+	server.players[npc.id] = npc
+	server.players[rc.id] = rc
+	sl := &ServerList{
+		server:    server,
+		connected: true,
+		sendQueue: make(chan []byte, 4),
+		codec:     ENCRYPT_GEN_1,
+	}
+	server.serverList = sl
+
+	sl.sendPlayers()
+
+	var packets [][]byte
+	for len(sl.sendQueue) > 0 {
+		packets = append(packets, <-sl.sendQueue)
+	}
+	npcAdd := append([]byte{SVO_PLYRADD + 32}, NewBuffer().WriteGShort(npc.id).Bytes()...)
+	rcAdd := append([]byte{SVO_PLYRADD + 32}, NewBuffer().WriteGShort(rc.id).Bytes()...)
+	if !packetListContains(packets, npcAdd) {
+		t.Fatalf("sendPlayers did not include NPC server, packets=% X", packets)
+	}
+	if packetListContains(packets, rcAdd) {
+		t.Fatalf("sendPlayers included RC player, packets=% X", packets)
+	}
+}
+
+func packetListContains(packets [][]byte, needle []byte) bool {
+	for _, packet := range packets {
+		if bytes.Contains(packet, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestServerListSendPacketUsesActiveCodec(t *testing.T) {
