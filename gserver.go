@@ -2589,7 +2589,7 @@ func (p *Player) sendPLO_BOARDMODIFY(x, y, width, height int16, tiles []int16) b
 	buf := NewBuffer()
 	buf.WriteByte(PLO_BOARDMODIFY).WriteGChar(byte(x)).WriteGChar(byte(y)).WriteGChar(byte(width)).WriteGChar(byte(height))
 	for _, tile := range tiles {
-		buf.WriteShort(tile)
+		buf.WriteGShort(uint16(tile))
 	}
 	p.send(buf)
 	return true
@@ -3012,7 +3012,7 @@ func (p *Player) msgPLI_BOARDMODIFY(packet []byte) bool {
 	tileCount := width * height
 	tiles := make([]int16, tileCount)
 	for i := 0; i < int(tileCount); i++ {
-		tiles[i] = buf.ReadShort()
+		tiles[i] = int16(buf.ReadGShort())
 	}
 	if level := p.getCurrentLevel(); level != nil {
 		oldTile := level.getTileAt(int(x), int(y))

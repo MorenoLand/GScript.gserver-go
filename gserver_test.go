@@ -876,7 +876,7 @@ func TestBoardModifyUsesGCharRegionHeader(t *testing.T) {
 	packet.WriteGChar(3)
 	packet.WriteGChar(1)
 	packet.WriteGChar(1)
-	packet.WriteShort(0x1234)
+	packet.WriteGShort(0x1234)
 
 	if !p.msgPLI_BOARDMODIFY(packet.Bytes()) {
 		t.Fatalf("msgPLI_BOARDMODIFY returned false")
@@ -919,7 +919,7 @@ func TestBoardModifyBroadcastsAndDropsBushItem(t *testing.T) {
 	packet := NewBuffer()
 	packet.WriteByte(PLI_BOARDMODIFY)
 	packet.WriteGChar(2).WriteGChar(3).WriteGChar(1).WriteGChar(1)
-	packet.WriteShort(0)
+	packet.WriteGShort(0)
 
 	if !p.msgPLI_BOARDMODIFY(packet.Bytes()) {
 		t.Fatalf("msgPLI_BOARDMODIFY returned false")
@@ -927,7 +927,7 @@ func TestBoardModifyBroadcastsAndDropsBushItem(t *testing.T) {
 	if level.getTileAt(2, 3) != 0 {
 		t.Fatalf("tile did not change to 0")
 	}
-	boardModify := []byte{PLO_BOARDMODIFY + 32, 2 + 32, 3 + 32, 1 + 32, 1 + 32, 0, 0, '\n'}
+	boardModify := []byte{PLO_BOARDMODIFY + 32, 2 + 32, 3 + 32, 1 + 32, 1 + 32, 32, 32, '\n'}
 	if !bytes.Contains(other.outQueue, boardModify) {
 		t.Fatalf("observer did not receive board modify % X in % X", boardModify, other.outQueue)
 	}
@@ -1085,7 +1085,7 @@ func TestBoardModifyUsesCurrentLevelWhenNameLookupMisses(t *testing.T) {
 	packet := NewBuffer()
 	packet.WriteByte(PLI_BOARDMODIFY)
 	packet.WriteGChar(2).WriteGChar(3).WriteGChar(1).WriteGChar(1)
-	packet.WriteShort(0)
+	packet.WriteGShort(0)
 
 	if !p.msgPLI_BOARDMODIFY(packet.Bytes()) {
 		t.Fatalf("msgPLI_BOARDMODIFY returned false")
@@ -1093,7 +1093,7 @@ func TestBoardModifyUsesCurrentLevelWhenNameLookupMisses(t *testing.T) {
 	if level.getTileAt(2, 3) != 0 {
 		t.Fatalf("tile did not change through currentLevel fallback")
 	}
-	boardModify := []byte{PLO_BOARDMODIFY + 32, 2 + 32, 3 + 32, 1 + 32, 1 + 32, 0, 0, '\n'}
+	boardModify := []byte{PLO_BOARDMODIFY + 32, 2 + 32, 3 + 32, 1 + 32, 1 + 32, 32, 32, '\n'}
 	if !bytes.Contains(other.outQueue, boardModify) {
 		t.Fatalf("observer did not receive board modify via currentLevel % X in % X", boardModify, other.outQueue)
 	}
@@ -1124,7 +1124,7 @@ func TestBoardModifyRespawnsOldTile(t *testing.T) {
 	if level.getTileAt(2, 3) != 2 {
 		t.Fatalf("tile did not respawn to 2")
 	}
-	respawnPacket := []byte{PLO_BOARDMODIFY + 32, 2 + 32, 3 + 32, 1 + 32, 1 + 32, 0, 2, '\n'}
+	respawnPacket := []byte{PLO_BOARDMODIFY + 32, 2 + 32, 3 + 32, 1 + 32, 1 + 32, 32, 34, '\n'}
 	if !bytes.Contains(observer.outQueue, respawnPacket) {
 		t.Fatalf("observer did not receive respawn packet % X in % X", respawnPacket, observer.outQueue)
 	}
