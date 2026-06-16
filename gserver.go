@@ -1069,6 +1069,9 @@ func (a *Account) LoadAccount(accountName string, ignoreNick bool) bool {
 			a.apCounter = uint8(atoi(val) & 0xFF)
 		case "ONSECS":
 			a.onlineTime = atoi(val)
+		case "IP":
+			a.accountIp = uint(atoi(val))
+			a.accountIpStr = val
 		case "LANGUAGE":
 			a.language = val
 			if a.language == "" {
@@ -1305,6 +1308,37 @@ func NewPlayer(conn net.Conn, s *Server) *Player {
 	return p
 }
 
+func accountIPFromAddr(addr net.Addr) uint {
+	if addr == nil {
+		return 0
+	}
+	var ip net.IP
+	if tcpAddr, ok := addr.(*net.TCPAddr); ok {
+		ip = tcpAddr.IP
+	} else {
+		host, _, err := net.SplitHostPort(addr.String())
+		if err == nil {
+			ip = net.ParseIP(host)
+		} else {
+			ip = net.ParseIP(addr.String())
+		}
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return 0
+	}
+	return uint(ip4[0])<<24 | uint(ip4[1])<<16 | uint(ip4[2])<<8 | uint(ip4[3])
+}
+
+func (p *Player) setAccountIPFromRemoteAddr(addr net.Addr) {
+	ip := accountIPFromAddr(addr)
+	if ip == 0 {
+		return
+	}
+	p.accountIp = ip
+	p.accountIpStr = fmt.Sprintf("%d", ip)
+}
+
 func (p *Player) OnRegister() bool { return true }
 func (p *Player) OnUnregister()    { p.disconnect() }
 func (p *Player) CanRecv() bool    { return true }
@@ -1389,12 +1423,19 @@ func (p *Player) sendRCLoginPayload() {
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if line != "" {
-				p.sendPLO_RC_ADMINMESSAGE(line)
+				p.sendPLO_RC_CHAT(line)
 			}
 		}
 		return
 	}
-	p.sendPLO_RC_ADMINMESSAGE("Welcome to " + p.server.name + " RC.")
+	p.sendPLO_RC_CHAT("Welcome to " + p.server.name + " RC.")
+}
+
+func (p *Player) sendPLO_RC_CHAT(message string) bool {
+	buf := NewBuffer()
+	buf.WriteByte(PLO_RC_CHAT).WriteString8(message)
+	p.send(buf)
+	return true
 }
 
 func (p *Player) sendRCPostLoginTail() {
@@ -1960,6 +2001,9 @@ func (p *Player) handleLogin(packet []byte) bool {
 	if !p.LoadAccount(account, true) {
 		p.server.logger.Error("Failed to load account for: %s", account)
 		return false
+	}
+	if p.conn != nil {
+		p.setAccountIPFromRemoteAddr(p.conn.RemoteAddr())
 	}
 	if p.loadedFromDefault && !p.isLoadOnly {
 		p.server.logger.Info("Creating new account from default: %s", account)
@@ -2761,7 +2805,7 @@ func (p *Player) sendWeapon(weapon *Weapon) bool {
 
 func (p *Player) sendPLO_RC_ADMINMESSAGE(message string) bool {
 	buf := NewBuffer()
-	buf.WriteByte(PLO_RC_ADMINMESSAGE).WriteGString(message)
+	buf.WriteByte(PLO_RC_ADMINMESSAGE).Write([]byte(message))
 	p.send(buf)
 	return true
 }
@@ -4907,9 +4951,14 @@ func (p *Player) msgPLI_RC_ACCOUNTSET(packet []byte) bool {
 	return true
 }
 func (p *Player) msgPLI_RC_CHAT(packet []byte) bool {
-	if len(packet) > 1 {
-		p.server.logger.Info("RC CHAT: %s", string(packet[1:]))
+	if len(packet) <= 1 {
+		return true
 	}
+	message := string(packet[1:])
+	p.server.logger.Info("RC CHAT: %s", message)
+	buf := NewBuffer()
+	buf.WriteByte(PLO_RC_CHAT).WriteString8(p.accountName + ": " + message)
+	p.server.sendPacketToType(PLTYPE_ANYRC, buf.Bytes())
 	return true
 }
 func (p *Player) msgPLI_PROFILEGET(packet []byte) bool {

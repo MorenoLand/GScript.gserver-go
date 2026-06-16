@@ -100,6 +100,112 @@ func TestRCPostLoginTailDoesNotAnnounceRCToGameClients(t *testing.T) {
 	}
 }
 
+func TestRCAdminMessageUsesRawPayload(t *testing.T) {
+	server := newLoginTestServer(t)
+	rc := NewPlayer(nil, server)
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	rc.sendPLO_RC_ADMINMESSAGE("Welcome")
+
+	want := append([]byte{PLO_RC_ADMINMESSAGE + 32}, []byte("Welcome")...)
+	want = append(want, '\n')
+	if !bytes.Equal(rc.outQueue, want) {
+		t.Fatalf("admin message packet = % X, want % X", rc.outQueue, want)
+	}
+}
+
+func TestRCLoginPayloadUsesChatForWelcomeMessages(t *testing.T) {
+	server := newLoginTestServer(t)
+	configDir := filepath.Join(server.config.GetBasePath(), "config")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "rcmessage.txt"), []byte("Welcome\nSay /help\n"), 0644); err != nil {
+		t.Fatalf("write rcmessage: %v", err)
+	}
+	rc := NewPlayer(nil, server)
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	rc.sendRCLoginPayload()
+
+	if bytes.Contains(rc.outQueue, []byte{PLO_RC_ADMINMESSAGE + 32}) {
+		t.Fatalf("rc login payload used admin-message packet: % X", rc.outQueue)
+	}
+	wantWelcome := append([]byte{PLO_RC_CHAT + 32}, NewBuffer().WriteString8("Welcome").Bytes()...)
+	wantHelp := append([]byte{PLO_RC_CHAT + 32}, NewBuffer().WriteString8("Say /help").Bytes()...)
+	if !bytes.Contains(rc.outQueue, wantWelcome) || !bytes.Contains(rc.outQueue, wantHelp) {
+		t.Fatalf("rc login payload missing chat welcome messages: % X", rc.outQueue)
+	}
+}
+
+func TestRCChatRelaysToConnectedRCs(t *testing.T) {
+	server := newLoginTestServer(t)
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.id = 2
+	rc.accountName = "Admin"
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[rc.id] = rc
+
+	rc.msgPLI_RC_CHAT([]byte{PLI_RC_CHAT, 'o', 'h'})
+
+	wantPayload := NewBuffer().WriteByte(PLO_RC_CHAT).WriteString8("Admin: oh").Bytes()
+	want := append([]byte{PLO_RC_CHAT + 32}, wantPayload[1:]...)
+	if !bytes.Equal(rc.outQueue, want) {
+		t.Fatalf("rc chat packet = % X, want % X", rc.outQueue, want)
+	}
+}
+
+func TestAccountLoadsAndSavesIP(t *testing.T) {
+	server := newLoginTestServer(t)
+	accountPath := filepath.Join(server.config.GetBasePath(), "accounts", "Admin.txt")
+	accountData, err := os.ReadFile(accountPath)
+	if err != nil {
+		t.Fatalf("read account: %v", err)
+	}
+	accountData = append(accountData, []byte("IP 3232235777\n")...)
+	if err := os.WriteFile(accountPath, accountData, 0644); err != nil {
+		t.Fatalf("write account: %v", err)
+	}
+	p := NewPlayer(nil, server)
+
+	if !p.LoadAccount("Admin", false) {
+		t.Fatalf("load account failed")
+	}
+	if p.accountIp != 3232235777 {
+		t.Fatalf("account IP = %d, want 3232235777", p.accountIp)
+	}
+	p.accountIp = 16909060
+	if !p.SaveAccount() {
+		t.Fatalf("save account failed")
+	}
+	saved, err := os.ReadFile(accountPath)
+	if err != nil {
+		t.Fatalf("read saved account: %v", err)
+	}
+	if !bytes.Contains(saved, []byte("IP 16909060\r\n")) {
+		t.Fatalf("saved account did not contain updated IP: %s", saved)
+	}
+}
+
+func TestAccountIPFromRemoteAddress(t *testing.T) {
+	got := accountIPFromAddr(&net.TCPAddr{IP: net.ParseIP("192.168.1.25")})
+	if got != 3232235801 {
+		t.Fatalf("account IP = %d, want 3232235801", got)
+	}
+	if got := accountIPFromAddr(fakeAddr("not an ip")); got != 0 {
+		t.Fatalf("non-IP addr = %d, want 0", got)
+	}
+}
+
+type fakeAddr string
+
+func (a fakeAddr) Network() string { return "fake" }
+func (a fakeAddr) String() string  { return string(a) }
+
 func newLoginTestServer(t *testing.T) *Server {
 	t.Helper()
 	dir := t.TempDir()
