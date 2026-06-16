@@ -159,6 +159,7 @@ func (s *Server) initNPCServer() {
 	if s.serverList != nil {
 		s.serverList.AddPlayer(p)
 	}
+	s.broadcastPlayerListEntryToClients(p)
 	s.logger.Info("NPC-Server initialized (id=%d account=%s nickname=%s type=%d x=%d y=%d)", p.id, p.accountName, p.character.nickName, p.playerType, int(p.x), int(p.y))
 }
 
@@ -1755,20 +1756,17 @@ func guntokenizeText(text string) string {
 }
 
 func (p *Player) sendRCPostLoginTail() {
+	p.server.broadcastPlayerListEntryToClients(p)
 	p.server.playerMu.RLock()
 	defer p.server.playerMu.RUnlock()
 	for _, other := range p.server.players {
-		if other == nil || other.id == p.id || other.conn == nil || !other.isLoggedIn() {
+		if other == nil || other.id == p.id || !other.isLoggedIn() {
 			continue
 		}
-		if other.playerType&PLTYPE_ANYCLIENT == 0 {
+		if other.playerType&PLTYPE_ANYNC != 0 {
 			continue
 		}
 		p.sendPLO_ADDPLAYER(other)
-		props := other.sendPropsWithArray(getLoginProps)
-		if len(props) > 0 {
-			p.sendPacket(append(other.otherPropsPacket(props), '\n'))
-		}
 	}
 }
 
@@ -1877,6 +1875,10 @@ func (p *Player) sendPostLoginTail() {
 		}
 	}
 	p.server.logger.Info("Exchanging player props with existing players...")
+	myClientProps := p.sendPropsWithArray(getRCLoginProps)
+	if p.playerType&PLTYPE_ANYCLIENT != 0 {
+		myClientProps = p.sendPropsWithArray(getLoginProps)
+	}
 	p.server.playerMu.RLock()
 	for _, other := range p.server.players {
 		if other == nil {
@@ -1892,20 +1894,27 @@ func (p *Player) sendPostLoginTail() {
 			continue
 		}
 		if other.conn != nil && isPlayerListPlayer(p) {
-			other.sendPLO_ADDPLAYER(p)
+			if other.playerType&PLTYPE_ANYCLIENT != 0 {
+				if shouldSendClientPlayerListEntry(p) && len(myClientProps) > 0 {
+					other.sendPacket(append(p.otherPropsPacket(myClientProps), '\n'))
+				}
+			} else {
+				other.sendPLO_ADDPLAYER(p)
+			}
 		}
 		if p.playerType&PLTYPE_ANYCLIENT != 0 {
-			p.sendPLO_ADDPLAYER(other)
+			if !shouldSendClientPlayerListEntry(other) {
+				continue
+			}
+			otherPropsSet := getRCLoginProps
+			if other.playerType&PLTYPE_ANYCLIENT != 0 {
+				otherPropsSet = getLoginProps
+			}
+			otherProps := other.sendPropsWithArray(otherPropsSet)
+			if len(otherProps) > 0 {
+				p.sendPacket(append(other.otherPropsPacket(otherProps), '\n'))
+			}
 		}
-		myProps := p.sendPropsWithArray(getLoginProps)
-		if len(myProps) > 0 && other.conn != nil && isPlayerListPlayer(p) {
-			other.sendPacket(append(p.otherPropsPacket(myProps), '\n'))
-		}
-		otherProps := other.sendPropsWithArray(getLoginProps)
-		if len(otherProps) == 0 {
-			continue
-		}
-		p.sendPacket(append(other.otherPropsPacket(otherProps), '\n'))
 	}
 	p.server.playerMu.RUnlock()
 	if p.playerType&PLTYPE_ANYCLIENT != 0 && p.versionId > 0 && p.versionId < 300 {
@@ -2422,13 +2431,12 @@ func (p *Player) handleLogin(packet []byte) bool {
 	p.server.logger.Info("Deleting missing default weapons...")
 	p.sendMissingDefaultWeaponDeletes()
 	p.server.logger.Info("Sending weapons...")
-	// TODO: Weapon system not fully implemented yet
-	// for _, weaponName := range p.weaponList {
-	// 	weapon := p.server.weapons[weaponName]
-	// 	if weapon == nil { continue }
-	// 	p.server.logger.Debug("Sending weapon: %s", weaponName)
-	// 	p.sendWeapon(weapon, 1000+uint32(len(weaponName)))
-	// }
+	for _, weaponName := range p.weaponList {
+		if strings.HasPrefix(weaponName, "-") {
+			continue
+		}
+		p.sendAccountWeapon(weaponName)
+	}
 	if p.versionId >= 221 && p.versionId <= 231 {
 		p.server.logger.Info("Sending zlib fix weapon...")
 		p.sendPLO_ZLIBFIXWEAPON()
@@ -2438,13 +2446,6 @@ func (p *Player) handleLogin(packet []byte) bool {
 	startLevel, startX, startY := p.loginWarpTarget()
 	p.server.logger.Info("Warping player to '%s' at (%.2f, %.2f)...", startLevel, startX, startY)
 	p.warp(startLevel, startX, startY)
-	p.server.logger.Info("Sending weapons...")
-	for _, weaponName := range p.weaponList {
-		if strings.HasPrefix(weaponName, "-") {
-			continue
-		}
-		p.sendAccountWeapon(weaponName)
-	}
 	p.server.logger.Info("Sending PLO_BIGMAP...")
 	bigmap := p.server.settings.Get("bigmap")
 	if bigmap != "" {
@@ -3229,12 +3230,8 @@ func (p *Player) sendPLO_NPCWEAPONDEL(weaponName string) bool {
 }
 
 func (p *Player) sendMissingDefaultWeaponDeletes() {
-	if !p.hasAccountWeapon("bomb") {
-		p.sendPLO_NPCWEAPONDEL("Bomb")
-	}
-	if !p.hasAccountWeapon("bow") {
-		p.sendPLO_NPCWEAPONDEL("Bow")
-	}
+	p.sendPLO_NPCWEAPONDEL("Bomb")
+	p.sendPLO_NPCWEAPONDEL("Bow")
 }
 
 func (p *Player) sendWeapon(weapon *Weapon) bool {
@@ -3512,6 +3509,9 @@ func (p *Player) sendLevelData(level *Level, levelName string, clientModTime int
 	}
 }
 func (p *Player) processTimeout() {
+	if p.playerType&PLTYPE_NPCSERVER != 0 {
+		return
+	}
 	if time.Since(p.lastData) > 5*time.Minute {
 		p.disconnect()
 	}
@@ -3840,6 +3840,8 @@ func (p *Player) getProp(propId int) []byte {
 		buf.WriteGShort(encodeSignedGShortCoord(p.y))
 	case PLPROP_Z2:
 		buf.WriteGShort(encodeSignedGShortCoord(clampInt16(p.z, -25*16, 85*16)))
+	case PLPROP_UNKNOWN81:
+		return buf.Bytes()
 	default:
 		// For unimplemented properties, return empty
 		buf.WriteGChar(0)
@@ -4506,7 +4508,14 @@ func (p *Player) msgPLI_PRIVATEMESSAGE(packet []byte) bool {
 		msgType = "\"Mass message:\","
 	}
 	for _, targetId := range targets {
-		if pl, ok := p.server.players[targetId]; ok && pl != p && pl.conn != nil {
+		if pl, ok := p.server.players[targetId]; ok && pl != p {
+			if pl.playerType&PLTYPE_NPCSERVER != 0 {
+				p.sendNPCServerPMFallback(pl)
+				continue
+			}
+			if pl.conn == nil {
+				continue
+			}
 			out := NewBuffer()
 			out.WriteByte(PLO_PRIVATEMESSAGE).WriteGShort(p.id).Write([]byte("\"\",")).Write([]byte(msgType)).Write([]byte(msg))
 			pl.send(out)
@@ -4514,6 +4523,19 @@ func (p *Player) msgPLI_PRIVATEMESSAGE(packet []byte) bool {
 	}
 	return true
 }
+
+func (p *Player) sendNPCServerPMFallback(npcServer *Player) bool {
+	if p == nil || npcServer == nil {
+		return false
+	}
+	msg := "I am the npcserver for\nthis game server. Almost\nall npc actions are controlled\nby me."
+	buf := NewBuffer()
+	buf.WriteByte(PLO_PRIVATEMESSAGE).WriteGShort(npcServer.id).Write([]byte("\"\","))
+	buf.Write([]byte(gtokenizeText(msg)))
+	p.send(buf)
+	return true
+}
+
 func (p *Player) msgPLI_NPCWEAPONDEL(packet []byte) bool {
 	if len(packet) > 1 {
 		p.deleteWeapon(string(packet[1:]))
@@ -8729,6 +8751,48 @@ func isPlayerListPlayer(player *Player) bool {
 	return player != nil && player.playerType&PLTYPE_ANYPLAYER != 0
 }
 
+func shouldSendClientPlayerListEntry(player *Player) bool {
+	if !isPlayerListPlayer(player) {
+		return false
+	}
+	if player.playerType&PLTYPE_NPCSERVER != 0 {
+		return true
+	}
+	if player.server == nil || player.server.settings == nil {
+		return true
+	}
+	if !player.server.settings.GetBool("hidestaff", false) {
+		return true
+	}
+	return !player.isStaff
+}
+
+func (s *Server) broadcastPlayerListEntryToClients(player *Player) {
+	if s == nil || player == nil || !shouldSendClientPlayerListEntry(player) {
+		return
+	}
+	propsSet := getRCLoginProps
+	if player.playerType&PLTYPE_ANYCLIENT != 0 {
+		propsSet = getLoginProps
+	}
+	props := player.sendPropsWithArray(propsSet)
+	if len(props) == 0 {
+		return
+	}
+	packet := append(player.otherPropsPacket(props), '\n')
+	s.playerMu.RLock()
+	defer s.playerMu.RUnlock()
+	for _, other := range s.players {
+		if other == nil || other == player || other.conn == nil || !other.isLoggedIn() {
+			continue
+		}
+		if other.playerType&PLTYPE_ANYCLIENT == 0 {
+			continue
+		}
+		other.sendPacket(packet)
+	}
+}
+
 func (sl *ServerList) sendPlayerAdd(player *Player) {
 	buf := NewBuffer()
 	buf.WriteGChar(SVO_PLYRADD)
@@ -8783,7 +8847,7 @@ func (sl *ServerList) SetUrl(url string) {
 }
 func (sl *ServerList) SetIp(ip string) {
 	buf := NewBuffer()
-	buf.WriteGChar(SVO_SETIP).WriteString8Encoded(ip)
+	buf.WriteGChar(SVO_SETIP).Write([]byte(ip))
 	sl.SendPacket(buf.Bytes())
 }
 func (sl *ServerList) SetPort(port string) {

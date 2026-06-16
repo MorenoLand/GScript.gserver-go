@@ -222,13 +222,47 @@ func TestRC2LoginReadsEncryptionKeyAndSkipsGameWorldLogin(t *testing.T) {
 	}
 }
 
-func TestRCPostLoginTailDoesNotAnnounceRCToGameClients(t *testing.T) {
+func TestRCPostLoginTailAnnouncesRCToGameClients(t *testing.T) {
 	server := newLoginTestServer(t)
 	rc := NewPlayer(nil, server)
 	rc.playerType = PLTYPE_RC2
 	rc.id = 2
 	rc.accountName = "Admin"
 	rc.character.nickName = "Admin"
+	rc.communityName = "Admin"
+	rc.loaded = true
+
+	game := NewPlayer(nil, server)
+	game.playerType = PLTYPE_CLIENT3
+	game.id = 3
+	game.accountName = "Player"
+	game.character.nickName = "Player"
+	gameServerConn, gameClientConn := net.Pipe()
+	defer gameServerConn.Close()
+	defer gameClientConn.Close()
+	game.conn = gameServerConn
+	game.queueOutgoing = true
+	game.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[game.id] = game
+
+	rc.sendRCPostLoginTail()
+
+	wantPrefix := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(rc.id).Bytes()...)
+	if !bytes.Contains(game.outQueue, wantPrefix) {
+		t.Fatalf("game client did not receive RC login props: % X", game.outQueue)
+	}
+}
+
+func TestRCPostLoginTailHonorsHideStaffForRC(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.settings.Set("hidestaff", "true")
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.id = 2
+	rc.accountName = "Admin"
+	rc.character.nickName = "Admin"
+	rc.isStaff = true
+	rc.loaded = true
 
 	game := NewPlayer(nil, server)
 	game.playerType = PLTYPE_CLIENT3
@@ -246,7 +280,37 @@ func TestRCPostLoginTailDoesNotAnnounceRCToGameClients(t *testing.T) {
 	rc.sendRCPostLoginTail()
 
 	if len(game.outQueue) != 0 {
-		t.Fatalf("game client received RC login packets: % X", game.outQueue)
+		t.Fatalf("game client received hidden RC login packets: % X", game.outQueue)
+	}
+}
+
+func TestRCPostLoginTailIncludesNPCServerWithoutSocket(t *testing.T) {
+	server := newLoginTestServer(t)
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.id = 2
+	rc.accountName = "Admin"
+	rc.character.nickName = "Admin"
+	rc.loaded = true
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	npc := &Player{
+		id:         1,
+		server:     server,
+		playerType: PLTYPE_NPCSERVER,
+		loaded:     true,
+	}
+	npc.accountName = "(npcserver)"
+	npc.character.nickName = "NPC-Server (Server)"
+	npc.communityName = "(npcserver)"
+	server.players[npc.id] = npc
+
+	rc.sendRCPostLoginTail()
+
+	want := append([]byte{PLO_ADDPLAYER + 32}, NewBuffer().WriteGShort(npc.id).Bytes()...)
+	if !bytes.Contains(rc.outQueue, want) {
+		t.Fatalf("rc did not receive npc-server addplayer entry: % X", rc.outQueue)
 	}
 }
 
@@ -1023,22 +1087,14 @@ func TestPostLoginTailExchangesAddPlayerAndOtherProps(t *testing.T) {
 
 	p.sendPostLoginTail()
 
-	pAdd := append([]byte{PLO_ADDPLAYER + 32}, NewBuffer().WriteGShort(other.id).Bytes()...)
 	pProps := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(other.id).Bytes()...)
-	otherAdd := append([]byte{PLO_ADDPLAYER + 32}, NewBuffer().WriteGShort(p.id).Bytes()...)
 	otherProps := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(p.id).Bytes()...)
 
-	if !bytes.Contains(p.outQueue, pAdd) {
-		t.Fatalf("new player did not receive existing player's PLO_ADDPLAYER: % X", p.outQueue)
-	}
 	if !bytes.Contains(p.outQueue, pProps) {
 		t.Fatalf("new player did not receive existing player's PLO_OTHERPLPROPS: % X", p.outQueue)
 	}
 	if !containsTerminatedPacket(p.outQueue, pProps) {
 		t.Fatalf("existing player's PLO_OTHERPLPROPS was not newline-terminated: % X", p.outQueue)
-	}
-	if !bytes.Contains(other.outQueue, otherAdd) {
-		t.Fatalf("existing player did not receive new player's PLO_ADDPLAYER: % X", other.outQueue)
 	}
 	if !bytes.Contains(other.outQueue, otherProps) {
 		t.Fatalf("existing player did not receive new player's PLO_OTHERPLPROPS: % X", other.outQueue)
@@ -1080,14 +1136,13 @@ func TestPostLoginTailSendsExistingRCAsBlankLevelPlayerListEntry(t *testing.T) {
 
 	p.sendPostLoginTail()
 
-	rcAdd := append([]byte{PLO_ADDPLAYER + 32}, NewBuffer().WriteGShort(rc.id).Bytes()...)
-	rcProps := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(rc.id).Bytes()...)
-	if !bytes.Contains(p.outQueue, rcAdd) || !bytes.Contains(p.outQueue, rcProps) {
-		t.Fatalf("game client did not receive RC playerlist entry: % X", p.outQueue)
+	rcPropsPrefix := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(rc.id).Bytes()...)
+	if !bytes.Contains(p.outQueue, rcPropsPrefix) {
+		t.Fatalf("game client did not receive RC login props packet: % X", p.outQueue)
 	}
-	blankLevel := []byte{PLPROP_CURLEVEL + 32, 1 + 32, ' '}
-	if !bytes.Contains(p.outQueue, blankLevel) {
-		t.Fatalf("RC playerlist entry did not use blank level: % X", p.outQueue)
+	rcAdd := append([]byte{PLO_ADDPLAYER + 32}, NewBuffer().WriteGShort(rc.id).Bytes()...)
+	if bytes.Contains(p.outQueue, rcAdd) {
+		t.Fatalf("game client should not receive RC PLO_ADDPLAYER during login exchange: % X", p.outQueue)
 	}
 }
 
@@ -1121,10 +1176,100 @@ func TestPostLoginTailSendsNPCServerPlayerListEntry(t *testing.T) {
 
 	p.sendPostLoginTail()
 
+	npcPropsPrefix := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(npc.id).Bytes()...)
+	if !bytes.Contains(p.outQueue, npcPropsPrefix) {
+		t.Fatalf("game client did not receive NPC server RC-style props packet: % X", p.outQueue)
+	}
 	npcAdd := append([]byte{PLO_ADDPLAYER + 32}, NewBuffer().WriteGShort(npc.id).Bytes()...)
-	npcProps := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(npc.id).Bytes()...)
-	if !bytes.Contains(p.outQueue, npcAdd) || !bytes.Contains(p.outQueue, npcProps) {
-		t.Fatalf("game client did not receive NPC server playerlist entry: % X", p.outQueue)
+	if bytes.Contains(p.outQueue, npcAdd) {
+		t.Fatalf("game client should not receive NPC-server PLO_ADDPLAYER during login exchange: % X", p.outQueue)
+	}
+}
+
+func TestPostLoginTailDoesNotHideNPCServerWhenHideStaffEnabled(t *testing.T) {
+	server := &Server{
+		logger:   NewLogger("", false),
+		settings: NewSettings(),
+		players:  make(map[uint16]*Player),
+	}
+	server.settings.Set("hidestaff", "true")
+	p := &Player{
+		id:            2,
+		server:        server,
+		playerType:    PLTYPE_CLIENT3,
+		versionId:     222,
+		queueOutgoing: true,
+	}
+	p.accountName = "Z"
+	p.character.nickName = "Z"
+	p.levelName = "onlinestartlocal.nw"
+	npc := &Player{
+		id:         1,
+		server:     server,
+		playerType: PLTYPE_NPCSERVER,
+		loaded:     true,
+	}
+	npc.accountName = "(npcserver)"
+	npc.character.nickName = "NPC-Server (Server)"
+	npc.communityName = "(npcserver)"
+	npc.isStaff = true
+	server.players[p.id] = p
+	server.players[npc.id] = npc
+
+	p.sendPostLoginTail()
+
+	npcPropsPrefix := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(npc.id).Bytes()...)
+	if !bytes.Contains(p.outQueue, npcPropsPrefix) {
+		t.Fatalf("game client did not receive NPC server while hidestaff=true: % X", p.outQueue)
+	}
+}
+
+func TestInitNPCServerBroadcastsToOnlineGameClients(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.settings.Set("serverside", "true")
+	game := NewPlayer(nil, server)
+	game.playerType = PLTYPE_CLIENT3
+	game.id = 2
+	game.accountName = "Player"
+	game.character.nickName = "Player"
+	game.communityName = "Player"
+	game.loaded = true
+	gameServerConn, gameClientConn := net.Pipe()
+	defer gameServerConn.Close()
+	defer gameClientConn.Close()
+	game.conn = gameServerConn
+	game.queueOutgoing = true
+	game.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[game.id] = game
+
+	server.initNPCServer()
+
+	npc := server.GetPlayer(1)
+	if npc == nil {
+		t.Fatal("npc-server was not initialized")
+	}
+	wantPrefix := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(npc.id).Bytes()...)
+	if !bytes.Contains(game.outQueue, wantPrefix) {
+		t.Fatalf("game client did not receive npc-server broadcast: % X", game.outQueue)
+	}
+}
+
+func TestGetPropUnknown81IsMarkerWithoutPayload(t *testing.T) {
+	p := &Player{
+		id:            1,
+		server:        &Server{logger: NewLogger("", false), settings: NewSettings()},
+		playerType:    PLTYPE_CLIENT3,
+		versionId:     222,
+		queueOutgoing: true,
+	}
+	p.accountName = "Z"
+	p.character.nickName = "Z"
+	p.communityName = "Z"
+	p.levelName = "onlinestartlocal.nw"
+
+	prop := p.getProp(PLPROP_UNKNOWN81)
+	if len(prop) != 0 {
+		t.Fatalf("UNKNOWN81 prop payload = % X, want empty marker payload", prop)
 	}
 }
 
@@ -1483,10 +1628,32 @@ func TestServerListTimedEventsSendsSetIPKeepalive(t *testing.T) {
 	sl.doTimedEvents()
 
 	got := <-sl.sendQueue
-	want := NewBuffer().WriteGChar(SVO_SETIP).WriteString8Encoded("AUTO").Bytes()
+	want := NewBuffer().WriteGChar(SVO_SETIP).Write([]byte("AUTO")).Bytes()
 	want = append(want, '\n')
 	if !bytes.Equal(got, want) {
 		t.Fatalf("keepalive packet = % X, want % X", got, want)
+	}
+}
+
+func TestServerListSetIpUsesRawPayload(t *testing.T) {
+	server := &Server{logger: NewLogger("", false), settings: NewSettings()}
+	sl := &ServerList{
+		server:    server,
+		connected: true,
+		sendQueue: make(chan []byte, 1),
+		codec:     ENCRYPT_GEN_1,
+	}
+
+	sl.SetIp("orion.moreno.land")
+
+	got := <-sl.sendQueue
+	want := NewBuffer().WriteGChar(SVO_SETIP).Write([]byte("orion.moreno.land")).Bytes()
+	want = append(want, '\n')
+	if !bytes.Equal(got, want) {
+		t.Fatalf("SETIP packet = % X, want % X", got, want)
+	}
+	if bytes.Contains(got, []byte("1orion.moreno.land")) {
+		t.Fatalf("SETIP leaked length byte into ip payload: %q", got)
 	}
 }
 
@@ -1525,6 +1692,27 @@ func TestOneSecondEventsDisconnectsStalePlayersWithoutDeadlock(t *testing.T) {
 		if pid == p.id {
 			t.Fatalf("stale player id %d still present in level players", p.id)
 		}
+	}
+}
+
+func TestOneSecondEventsDoesNotDisconnectNPCServer(t *testing.T) {
+	server := &Server{
+		logger:  NewLogger("", false),
+		players: make(map[uint16]*Player),
+	}
+	npc := &Player{
+		id:         1,
+		server:     server,
+		playerType: PLTYPE_NPCSERVER,
+		loaded:     true,
+		lastData:   time.Now().Add(-6 * time.Minute),
+	}
+	server.players[npc.id] = npc
+
+	server.oneSecondEvents()
+
+	if got := server.GetPlayer(npc.id); got == nil {
+		t.Fatal("npc-server pseudo-player was disconnected as stale")
 	}
 }
 
@@ -3432,6 +3620,64 @@ func TestWeaponAddAndDeleteMutateWeaponList(t *testing.T) {
 	}
 }
 
+func TestPrivateMessageToNPCServerGetsDefaultReply(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	server := &Server{
+		logger:  NewLogger("", false),
+		players: make(map[uint16]*Player),
+	}
+	p := &Player{
+		conn:       serverConn,
+		server:     server,
+		encryption: *NewEncryption(),
+		id:         5,
+	}
+	p.encryption.SetGen(ENCRYPT_GEN_1)
+	npc := &Player{
+		server:     server,
+		playerType: PLTYPE_NPCSERVER,
+		id:         1,
+		loaded:     true,
+	}
+	npc.accountName = "(npcserver)"
+	npc.character.nickName = "NPC-Server (Server)"
+	server.players[p.id] = p
+	server.players[npc.id] = npc
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PRIVATEMESSAGE)
+	packet.WriteGShort(1)
+	packet.WriteGShort(1)
+	packet.Write([]byte("\"hello\""))
+
+	done := make(chan struct{}, 1)
+	go func() {
+		p.msgPLI_PRIVATEMESSAGE(packet.Bytes())
+		done <- struct{}{}
+	}()
+
+	idBuf := NewBuffer()
+	idBuf.WriteGShort(1)
+	want := append([]byte{PLO_PRIVATEMESSAGE + 32}, idBuf.Bytes()...)
+	want = append(want, []byte("\"\",")...)
+	want = append(want, []byte(gtokenizeText("I am the npcserver for\nthis game server. Almost\nall npc actions are controlled\nby me."))...)
+	want = append(want, '\n')
+
+	clientConn.SetReadDeadline(time.Now().Add(time.Second))
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(clientConn, got); err != nil {
+		t.Fatalf("read npcserver pm reply packet: %v", err)
+	}
+	<-done
+
+	if string(got) != string(want) {
+		t.Fatalf("npcserver pm reply packet = % X, want % X", got, want)
+	}
+}
+
 func TestExplosionAddsPlayerIdAndTypedPayload(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -3650,7 +3896,7 @@ func TestSendAccountWeaponRespectsDefaultWeaponsServerOption(t *testing.T) {
 	}
 }
 
-func TestMissingDefaultWeaponDeletesSkipAccountBombAndBow(t *testing.T) {
+func TestMissingDefaultWeaponDeletesAlwaysRemoveClientAutoDefaults(t *testing.T) {
 	p := &Player{
 		server:        &Server{logger: NewLogger("", false), settings: NewSettings()},
 		queueOutgoing: true,
@@ -3663,11 +3909,8 @@ func TestMissingDefaultWeaponDeletesSkipAccountBombAndBow(t *testing.T) {
 
 	bombDel := []byte{PLO_NPCWEAPONDEL + 32, 'B', 'o', 'm', 'b', '\n'}
 	bowDel := []byte{PLO_NPCWEAPONDEL + 32, 'B', 'o', 'w', '\n'}
-	if bytes.Contains(p.outQueue, bombDel) || bytes.Contains(p.outQueue, bowDel) {
-		t.Fatalf("deleted account default weapons: % X", p.outQueue)
-	}
-	if len(p.outQueue) != 0 {
-		t.Fatalf("unexpected default weapon deletes: % X", p.outQueue)
+	if !bytes.Contains(p.outQueue, bombDel) || !bytes.Contains(p.outQueue, bowDel) {
+		t.Fatalf("missing client auto-default deletes: % X", p.outQueue)
 	}
 }
 
