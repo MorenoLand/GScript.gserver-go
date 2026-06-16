@@ -1363,10 +1363,55 @@ func (p *Player) processPackets() {
 				return
 			}
 			p.server.AddPlayer(p, p.id)
-			p.sendPostLoginTail()
+			if p.playerType&PLTYPE_ANYCLIENT != 0 {
+				p.sendPostLoginTail()
+			} else if p.playerType&PLTYPE_ANYRC != 0 {
+				p.sendRCPostLoginTail()
+			}
 			continue
 		}
 		p.handleRawData(packet)
+	}
+}
+
+func loginTypeUsesEncryptionKey(clientType int) bool {
+	return clientType == PLTYPE_CLIENT2 || clientType == PLTYPE_CLIENT3 || clientType == PLTYPE_RC2
+}
+
+func (p *Player) sendRCLoginPayload() {
+	maxUpload := p.server.settings.GetInt("maxuploadfilesize", 20*1024*1024)
+	buf := NewBuffer()
+	buf.WriteByte(PLO_RC_MAXUPLOADFILESIZE).WriteGInt5(uint64(maxUpload))
+	p.send(buf)
+
+	lines, err := p.server.config.LoadFileAsLines("config/rcmessage.txt")
+	if err == nil && len(lines) > 0 {
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line != "" {
+				p.sendPLO_RC_ADMINMESSAGE(line)
+			}
+		}
+		return
+	}
+	p.sendPLO_RC_ADMINMESSAGE("Welcome to " + p.server.name + " RC.")
+}
+
+func (p *Player) sendRCPostLoginTail() {
+	p.server.playerMu.RLock()
+	defer p.server.playerMu.RUnlock()
+	for _, other := range p.server.players {
+		if other == nil || other.id == p.id || other.conn == nil || !other.isLoggedIn() {
+			continue
+		}
+		if other.playerType&PLTYPE_ANYCLIENT == 0 {
+			continue
+		}
+		p.sendPLO_ADDPLAYER(other)
+		props := other.sendPropsWithArray(getLoginProps)
+		if len(props) > 0 {
+			p.sendPacket(append(other.otherPropsPacket(props), '\n'))
+		}
 	}
 }
 
@@ -1772,7 +1817,7 @@ func (p *Player) handleLogin(packet []byte) bool {
 	p.server.logger.Debug("handleLogin: clientTypeByte=%d (raw byte=%d) clientType=%d", clientTypeByte, decompressed[0], clientType)
 	// Read encryption key for GEN_4+ clients (key is G-encoded)
 	var encryptionKey byte
-	if clientType&PLTYPE_ANYCLIENT != 0 && clientType != PLTYPE_CLIENT {
+	if loginTypeUsesEncryptionKey(clientType) {
 		p.server.logger.Debug("handleLogin: Reading encryption key for GEN_4+ client")
 		if buf.Remaining() < 1 {
 			return false
@@ -1875,6 +1920,9 @@ func (p *Player) handleLogin(packet []byte) bool {
 	case PLTYPE_CLIENT3:
 		p.server.logger.Debug("Matched PLTYPE_CLIENT3")
 		p.encryption.gen = ENCRYPT_GEN_5
+	case PLTYPE_RC2:
+		p.server.logger.Debug("Matched PLTYPE_RC2")
+		p.encryption.gen = ENCRYPT_GEN_5
 	default:
 		p.server.logger.Debug("Matched default case")
 		p.encryption.gen = ENCRYPT_GEN_3
@@ -1916,6 +1964,14 @@ func (p *Player) handleLogin(packet []byte) bool {
 	if p.loadedFromDefault && !p.isLoadOnly {
 		p.server.logger.Info("Creating new account from default: %s", account)
 		p.SaveAccount()
+	}
+	if clientType&PLTYPE_ANYRC != 0 {
+		p.server.logger.Info("Sending RC login payload...")
+		p.sendRCLoginPayload()
+		p.sendCompress(true)
+		p.loaded = true
+		p.server.logger.Info("[%s] RC logged in (type=%d)", account, clientType)
+		return true
 	}
 	p.server.logger.Info("Sending login props (PLO_PLAYERPROPS)...")
 	p.sendProps(sendLoginProps)

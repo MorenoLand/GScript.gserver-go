@@ -51,6 +51,97 @@ func TestLoadSettingsControlsPacketDebugSeparately(t *testing.T) {
 	}
 }
 
+func TestRC2LoginReadsEncryptionKeyAndSkipsGameWorldLogin(t *testing.T) {
+	server := newLoginTestServer(t)
+	p := NewPlayer(nil, server)
+
+	if !p.handleLogin(buildLoginPacket(t, 6, 42, "G3D0311C", "Admin", "pass", "win,test,6.037")) {
+		t.Fatalf("RC2 login was rejected")
+	}
+	if p.playerType != PLTYPE_RC2 {
+		t.Fatalf("playerType = %d, want RC2 (%d)", p.playerType, PLTYPE_RC2)
+	}
+	if p.encryption.gen != ENCRYPT_GEN_5 {
+		t.Fatalf("encryption gen = %d, want GEN_5 (%d)", p.encryption.gen, ENCRYPT_GEN_5)
+	}
+	if p.outEncryption.gen != ENCRYPT_GEN_5 {
+		t.Fatalf("out encryption gen = %d, want GEN_5 (%d)", p.outEncryption.gen, ENCRYPT_GEN_5)
+	}
+	if p.currentLevel != nil {
+		t.Fatalf("RC login entered game level %q", p.levelName)
+	}
+}
+
+func TestRCPostLoginTailDoesNotAnnounceRCToGameClients(t *testing.T) {
+	server := newLoginTestServer(t)
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.id = 2
+	rc.accountName = "Admin"
+	rc.character.nickName = "Admin"
+
+	game := NewPlayer(nil, server)
+	game.playerType = PLTYPE_CLIENT3
+	game.id = 3
+	game.accountName = "Player"
+	game.character.nickName = "Player"
+	gameServerConn, gameClientConn := net.Pipe()
+	defer gameServerConn.Close()
+	defer gameClientConn.Close()
+	game.conn = gameServerConn
+	game.queueOutgoing = true
+	game.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[game.id] = game
+
+	rc.sendRCPostLoginTail()
+
+	if len(game.outQueue) != 0 {
+		t.Fatalf("game client received RC login packets: % X", game.outQueue)
+	}
+}
+
+func newLoginTestServer(t *testing.T) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "accounts"), 0755); err != nil {
+		t.Fatalf("create accounts dir: %v", err)
+	}
+	account := "" +
+		"GRACC001\n" +
+		"NICK Admin\n" +
+		"LOCALRIGHTS 1\n" +
+		"LEVEL onlinestartlocal.nw\n" +
+		"X 4\n" +
+		"Y 4\n"
+	if err := os.WriteFile(filepath.Join(dir, "accounts", "Admin.txt"), []byte(account), 0644); err != nil {
+		t.Fatalf("write account: %v", err)
+	}
+	server := NewServer("Test")
+	server.config = NewFileSystem(dir)
+	server.settings = NewSettings()
+	server.adminSettings = NewSettings()
+	server.logger = NewLogger("", false)
+	return server
+}
+
+func buildLoginPacket(t *testing.T, clientTypeByte byte, encryptionKey byte, version, account, password, identity string) []byte {
+	t.Helper()
+	raw := NewBuffer()
+	raw.WriteGChar(clientTypeByte)
+	if clientTypeByte == 4 || clientTypeByte == 5 || clientTypeByte == 6 {
+		raw.WriteGChar(encryptionKey)
+	}
+	raw.Write([]byte(version))
+	raw.WriteGChar(byte(len(account))).Write([]byte(account))
+	raw.WriteGChar(byte(len(password))).Write([]byte(password))
+	raw.Write([]byte(identity))
+	compressed, err := ZlibCompress(raw.Bytes())
+	if err != nil {
+		t.Fatalf("compress login packet: %v", err)
+	}
+	return compressed
+}
+
 func TestSendPacketGen5LengthExcludesLengthPrefix(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
