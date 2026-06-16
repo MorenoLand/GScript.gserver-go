@@ -402,6 +402,65 @@ func TestLoadAllowedVersionsStripsCommentsAndWhitespace(t *testing.T) {
 	}
 }
 
+func TestDefaultAllowedVersionsIncludesKnownClientSet(t *testing.T) {
+	server := &Server{logger: NewLogger("", false), config: NewFileSystem("servers/default")}
+
+	server.loadAllowedVersions()
+
+	got := map[string]int{}
+	for _, version := range server.allowedVersions {
+		got[version]++
+	}
+	want := []string{
+		"GNW13110",
+		"GNW31101",
+		"GNW01012",
+		"GNW23012",
+		"GNW30042",
+		"GNW19052",
+		"GNW20052",
+		"GNW12102",
+		"GNW22122",
+		"GNW21033",
+		"GNW15053",
+		"GNW28063",
+		"GNW01113",
+		"GNW03014",
+		"GNW14015",
+		"GNW28015",
+		"G3D16053",
+		"G3D27063",
+		"G3D03014",
+		"G3D28095",
+		"G3D09125",
+		"G3D17026",
+		"G3D26076",
+		"G3D20126",
+		"G3D22067",
+		"G3D14097",
+		"G3D26090",
+		"G3D3007A",
+		"G3D2505C",
+		"G3D0311C",
+		"G3D0511C",
+		"G3D04048",
+		"G3D18010",
+		"G3D29090",
+		"G3D2504D",
+	}
+	for _, version := range want {
+		if got[version] == 0 {
+			t.Fatalf("default allowedversions missing %s", version)
+		}
+	}
+	if got["G3D3007A"] != 2 {
+		t.Fatalf("default allowedversions has %d G3D3007A entries, want 2", got["G3D3007A"])
+	}
+	if len(server.allowedVersions) != 36 {
+		t.Fatalf("default allowedversions count = %d, want 36", len(server.allowedVersions))
+	}
+}
+
 func TestServerListSendsAllowedVersionsText(t *testing.T) {
 	server := &Server{
 		logger:          NewLogger("", false),
