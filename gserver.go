@@ -107,9 +107,6 @@ func (s *Server) Init(serverIP, serverPort, localIP, serverInterface string) err
 		s.settings.Set("serverinterface", serverInterface)
 	}
 	s.loadConfigFiles()
-	if s.settings.GetBool("serverside", false) {
-		s.initNPCServer()
-	}
 	addr := ":14802"
 	if port := s.settings.Get("serverport"); port != "" {
 		addr = ":" + port
@@ -123,6 +120,9 @@ func (s *Server) Init(serverIP, serverPort, localIP, serverInterface string) err
 }
 
 func (s *Server) initNPCServer() {
+	if s.players == nil {
+		s.players = make(map[uint16]*Player)
+	}
 	p := &Player{conn: nil, server: s, recvBuffer: make([]byte, 0, 8192), encryption: *NewEncryption(), playerType: PLTYPE_NPCSERVER, cachedLevels: make([]*CachedLevel, 0), rcLargeFiles: make(map[string]string), singleplayerLevels: make(map[string]*Level), channelList: make(map[string]bool), knownFiles: make(map[string]bool), externalPlayers: make(map[uint16]*Player), externalPlayerIdGen: EXTERNALPLAYERID_INIT, firstLevel: true, loaded: true, packetCount: 0, invalidPackets: 0}
 	p.flagList = make(map[string]string)
 	p.folderRights = *NewFilePermissions()
@@ -150,8 +150,37 @@ func (s *Server) initNPCServer() {
 	s.playerMu.Lock()
 	s.players[p.id] = p
 	s.playerMu.Unlock()
-	s.serverList.AddPlayer(p)
+	if s.serverList != nil {
+		s.serverList.AddPlayer(p)
+	}
 	s.logger.Info("NPC-Server initialized (id=%d account=%s nickname=%s type=%d x=%d y=%d)", p.id, p.accountName, p.character.nickName, p.playerType, int(p.x), int(p.y))
+}
+
+func (s *Server) syncNPCServer() {
+	wantNPCServer := s.settings.GetBool("serverside", false)
+	var npcServer *Player
+	s.playerMu.RLock()
+	for _, player := range s.players {
+		if player != nil && player.playerType == PLTYPE_NPCSERVER {
+			npcServer = player
+			break
+		}
+	}
+	s.playerMu.RUnlock()
+
+	if wantNPCServer {
+		if npcServer == nil {
+			s.initNPCServer()
+			return
+		}
+		if s.serverList != nil && s.serverList.connected {
+			s.serverList.AddPlayer(npcServer)
+		}
+		return
+	}
+	if npcServer != nil {
+		s.DeletePlayer(npcServer)
+	}
 }
 
 func (s *Server) Run() error {
@@ -286,6 +315,7 @@ func (s *Server) loadSettings() {
 	}
 	DEBUG_MODE = s.settings.GetBool("debugmode", false)
 	PACKET_DEBUG_MODE = s.settings.GetBool("packetdebugmode", false)
+	s.syncNPCServer()
 }
 func (s *Server) loadAdminSettings() {
 	if err := s.adminSettings.Load(s.config.ResolvePath("config/adminconfig.txt")); err != nil {

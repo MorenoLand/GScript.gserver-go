@@ -52,6 +52,55 @@ func TestLoadSettingsControlsPacketDebugSeparately(t *testing.T) {
 	}
 }
 
+func TestLoadSettingsSyncsNPCServerPlayer(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	writeOptions := func(contents string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(configDir, "serveroptions.txt"), []byte(contents), 0644); err != nil {
+			t.Fatalf("write serveroptions: %v", err)
+		}
+	}
+	countNPCServers := func(server *Server) int {
+		t.Helper()
+		count := 0
+		for _, player := range server.players {
+			if player != nil && player.playerType == PLTYPE_NPCSERVER {
+				count++
+			}
+		}
+		return count
+	}
+
+	server := NewServer("Test")
+	server.config = NewFileSystem(dir)
+	server.logger = NewLogger("", false)
+
+	writeOptions("serverside = true\nnickname = NPC-Server\n")
+	server.loadSettings()
+	if got := countNPCServers(server); got != 1 {
+		t.Fatalf("NPC server count = %d, want 1", got)
+	}
+	npc := server.players[1]
+	if npc == nil || npc.accountName != "(npcserver)" || npc.character.nickName != "NPC-Server (Server)" {
+		t.Fatalf("NPC server player = %#v", npc)
+	}
+
+	server.loadSettings()
+	if got := countNPCServers(server); got != 1 {
+		t.Fatalf("NPC server count after reload = %d, want 1", got)
+	}
+
+	writeOptions("serverside = false\n")
+	server.loadSettings()
+	if got := countNPCServers(server); got != 0 {
+		t.Fatalf("NPC server count after disabling = %d, want 0", got)
+	}
+}
+
 func TestRC2LoginReadsEncryptionKeyAndSkipsGameWorldLogin(t *testing.T) {
 	server := newLoginTestServer(t)
 	p := NewPlayer(nil, server)
