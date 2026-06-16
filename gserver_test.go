@@ -4876,6 +4876,106 @@ func TestRequestTextForwardsTwoFieldSimpleListToListserver(t *testing.T) {
 	}
 }
 
+func TestRequestTextForwardsCommaStylePMServersToListserver(t *testing.T) {
+	server := &Server{logger: NewLogger("", false)}
+	sl := &ServerList{
+		server:    server,
+		connected: true,
+		enabled:   true,
+		codec:     ENCRYPT_GEN_1,
+		sendQueue: make(chan []byte, 1),
+	}
+	server.serverList = sl
+	p := &Player{id: 321, server: server}
+
+	request := "-ServerListScreen,pmservers,\"\""
+	if !p.msgPLI_REQUESTTEXT(append([]byte{PLI_REQUESTTEXT}, []byte(request)...)) {
+		t.Fatal("msgPLI_REQUESTTEXT returned false")
+	}
+
+	var got []byte
+	select {
+	case got = <-sl.sendQueue:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for forwarded comma pmservers request")
+	}
+	want := NewBuffer().
+		WriteGChar(SVO_REQUESTLIST).
+		WriteGShort(321).
+		Write([]byte(request)).
+		WriteByte('\n').
+		Bytes()
+	if !bytes.Equal(got, want) {
+		t.Fatalf("forwarded comma pmservers request = % X, want % X", got, want)
+	}
+}
+
+func TestHandlePacketAcceptsCommaRequestTextAndUpdateGani(t *testing.T) {
+	server := &Server{logger: NewLogger("", false), config: NewFileSystem(t.TempDir())}
+	sl := &ServerList{
+		server:    server,
+		connected: true,
+		enabled:   true,
+		codec:     ENCRYPT_GEN_1,
+		sendQueue: make(chan []byte, 2),
+	}
+	server.serverList = sl
+	p := &Player{id: 321, server: server}
+	p.Account.accountName = "moondeath"
+
+	if !p.handlePacket(append([]byte{byte(PLI_REQUESTTEXT + 32)}, []byte("-ServerListScreen,pmservers,\"\"")...)) {
+		t.Fatal("handlePacket returned false for comma requestText")
+	}
+	updateGani := append([]byte{byte(PLI_UPDATEGANI + 32), 0x20, 0x20, 0x20, 0x20, 0x20}, []byte("walk")...)
+	if !p.handlePacket(updateGani) {
+		t.Fatal("handlePacket returned false for updateGANI")
+	}
+	if p.invalidPackets != 0 {
+		t.Fatalf("invalidPackets = %d, want 0", p.invalidPackets)
+	}
+}
+
+func TestUpdatePackageRequestSkipsPacketId(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "packages"), 0755); err != nil {
+		t.Fatalf("mkdir packages: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "packages", "basepackage.gupd"), []byte("body.png 8\n"), 0644); err != nil {
+		t.Fatalf("write package: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "body.png"), []byte("bodydata"), 0644); err != nil {
+		t.Fatalf("write package file: %v", err)
+	}
+
+	p := &Player{
+		server:        &Server{logger: NewLogger("", false), config: NewFileSystem(dir)},
+		encryption:    *NewEncryption(),
+		queueOutgoing: true,
+	}
+	p.encryption.SetGen(ENCRYPT_GEN_1)
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_UPDATEPACKAGEREQUESTFILE)
+	packet.WriteGByte(byte(len("basepackage")))
+	packet.Write([]byte("basepackage"))
+	packet.WriteGByte(1)
+	packet.WriteString("")
+
+	p.msgPLI_UPDATEPACKAGEREQUESTFILE(packet.Bytes())
+
+	want := NewBuffer()
+	want.WriteByte(PLO_UPDATEPACKAGESIZE + 32)
+	want.WriteGByte(byte(len("basepackage")))
+	want.Write([]byte("basepackage"))
+	want.WriteInt64(int64(len("bodydata")))
+	want.WriteByte('\n')
+
+	got := p.outQueue[:want.Len()]
+	if !bytes.Equal(got, want.Bytes()) {
+		t.Fatalf("update package size = % X, want % X", got, want.Bytes())
+	}
+}
+
 func TestServerListRequestTextRelaysToPlayer(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()

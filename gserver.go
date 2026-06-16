@@ -6545,7 +6545,14 @@ func (p *Player) msgPLI_REQUESTTEXT(packet []byte) bool {
 	}
 	rawText := string(packet[1:])
 	data := rawText
-	data = strings.ReplaceAll(data, "\x01", "\n")
+	commaStyle := false
+	if strings.Contains(data, "\x01") {
+		data = strings.ReplaceAll(data, "\x01", "\n")
+		data = strings.TrimRight(data, "\n")
+	} else if strings.Contains(data, ",") {
+		commaStyle = true
+		data = guntokenizeText(data)
+	}
 	parts := strings.SplitN(data, "\n", 4)
 	if len(parts) < 2 {
 		return true
@@ -6553,7 +6560,7 @@ func (p *Player) msgPLI_REQUESTTEXT(packet []byte) bool {
 	weapon := "GraalEngine"
 	type_ := parts[0]
 	option := parts[1]
-	if parts[0] == "GraalEngine" && len(parts) >= 3 {
+	if len(parts) >= 3 && (commaStyle || parts[2] != "") {
 		weapon = parts[0]
 		type_ = parts[1]
 		option = parts[2]
@@ -6715,7 +6722,7 @@ func (p *Player) msgPLI_UPDATESCRIPT(packet []byte) bool {
 	return true
 }
 func (p *Player) msgPLI_UPDATEPACKAGEREQUESTFILE(packet []byte) bool {
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	packageNameLen := buf.ReadGByte()
 	packageName := string(buf.ReadBytes(int(packageNameLen)))
 	installType := buf.ReadGByte()
