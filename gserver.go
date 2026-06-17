@@ -1223,8 +1223,24 @@ func (s *Server) AddNPC(npc *NPC) bool {
 func (s *Server) DeleteNPC(id uint32) bool {
 	s.npcMu.Lock()
 	defer s.npcMu.Unlock()
-	if _, exists := s.npcs[id]; exists {
+	if npc, exists := s.npcs[id]; exists {
 		delete(s.npcs, id)
+		s.playerMu.RLock()
+		players := make([]*Player, 0, len(s.players))
+		for _, player := range s.players {
+			if player != nil && player.playerType&PLTYPE_ANYCLIENT != 0 {
+				players = append(players, player)
+			}
+		}
+		s.playerMu.RUnlock()
+		for _, player := range players {
+			player.sendPLO_NPCDEL(id)
+		}
+		if npc != nil && npc.level != nil {
+			npc.level.mu.Lock()
+			delete(npc.level.npcs, id)
+			npc.level.mu.Unlock()
+		}
 		return true
 	}
 	return false

@@ -872,6 +872,51 @@ func TestNCNPCWarpMovesLevelAndNotifiesNCs(t *testing.T) {
 	}
 }
 
+func TestNCNPCDeleteRemovesFromLiveLevel(t *testing.T) {
+	server := newLoginTestServer(t)
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	server.levels[level.levelName] = level
+	npc := NewNPC(DBNPC)
+	npc.id = 10000
+	npc.npcName = "Control-NPC"
+	npc.level = level
+	server.npcs[npc.id] = npc
+	level.npcs[npc.id] = npc
+
+	client := NewPlayer(nil, server)
+	client.id = 4
+	client.playerType = PLTYPE_CLIENT3
+	client.queueOutgoing = true
+	client.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[client.id] = client
+
+	nc := NewPlayer(nil, server)
+	nc.id = 9
+	nc.playerType = PLTYPE_NC
+	nc.accountName = "moondeath"
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_NC_NPCDELETE)
+	packet.WriteGInt(npc.id)
+	if !nc.msgPLI_NC_NPCDELETE(packet.Bytes()) {
+		t.Fatalf("msgPLI_NC_NPCDELETE returned false")
+	}
+	if server.GetNPC(npc.id) != nil {
+		t.Fatalf("npc remained in server map")
+	}
+	if _, ok := level.npcs[npc.id]; ok {
+		t.Fatalf("npc remained in level map")
+	}
+	want := append([]byte{PLO_NPCDEL + 32}, NewBuffer().WriteGInt(npc.id).Bytes()...)
+	if !bytes.Contains(client.outQueue, want) {
+		t.Fatalf("client did not receive NPC delete: % X, want % X", client.outQueue, want)
+	}
+}
+
 func TestNCNPCAddMissingLevelReportsToNC(t *testing.T) {
 	server := newLoginTestServer(t)
 	server.levels = map[string]*Level{}
