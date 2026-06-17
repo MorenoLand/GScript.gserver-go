@@ -1553,7 +1553,9 @@ func (p *Player) msgPLI_NC_NPCDELETE(packet []byte) bool {
 		buf2.WriteByte(PLO_NC_NPCDELETE)
 		buf2.WriteGInt(uint32(npcId))
 		p.server.sendPacketToType(PLTYPE_ANYNC, buf2.Bytes())
-		p.server.logger.Info("NPC %s deleted by %s", npcName, p.accountName)
+		logMsg := fmt.Sprintf("NPC %s deleted by %s", npcName, p.accountName)
+		p.server.logger.Info(logMsg)
+		p.server.sendToNC(logMsg)
 	}
 	return true
 }
@@ -1567,7 +1569,9 @@ func (p *Player) msgPLI_NC_NPCRESET(packet []byte) bool {
 	npc := p.server.GetNPC(npcId)
 	if npc != nil && npc.npcType == DBNPC {
 		npc.script = ""
-		p.server.logger.Info("NPC script of %s reset by %s", npc.npcName, p.accountName)
+		logMsg := fmt.Sprintf("NPC script of %s reset by %s", npc.npcName, p.accountName)
+		p.server.logger.Info(logMsg)
+		p.server.sendToNC(logMsg)
 	}
 	return true
 }
@@ -1637,7 +1641,9 @@ func (p *Player) msgPLI_NC_NPCSCRIPTSET(packet []byte) bool {
 	npc := p.server.GetNPC(npcId)
 	if npc != nil {
 		npc.script = npcScript
-		p.server.logger.Info("NPC script of %s updated by %s", npc.npcName, p.accountName)
+		logMsg := fmt.Sprintf("NPC script of %s updated by %s", npc.npcName, p.accountName)
+		p.server.logger.Info(logMsg)
+		p.server.sendToNC(logMsg)
 	}
 	return true
 }
@@ -1693,7 +1699,9 @@ func (p *Player) msgPLI_NC_NPCADD(packet []byte) bool {
 	buf2.WriteGChar(NPCPROP_CURLEVEL)
 	buf2.WriteGChar(byte(len(npcLevelName))).Write([]byte(npcLevelName))
 	p.server.sendPacketToType(PLTYPE_ANYNC, buf2.Bytes())
-	p.server.logger.Info("NPC %s added by %s", npcName, p.accountName)
+	logMsg := fmt.Sprintf("NPC %s added by %s", npcName, p.accountName)
+	p.server.logger.Info(logMsg)
+	p.server.sendToNC(logMsg)
 	return true
 }
 func (p *Player) msgPLI_NC_CLASSEDIT(packet []byte) bool {
@@ -1710,7 +1718,7 @@ func (p *Player) msgPLI_NC_CLASSEDIT(packet []byte) bool {
 		classCode := gtokenizeText(classObj.script)
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_CLASSGET)
-		buf2.WriteGChar(byte(len(className))).Write([]byte(className))
+		buf2.WriteByte(byte(len(className))).Write([]byte(className))
 		buf2.Write([]byte(classCode))
 		p.send(buf2)
 	}
@@ -1729,13 +1737,18 @@ func (p *Player) msgPLI_NC_CLASSADD(packet []byte) bool {
 	_, hasClass := p.server.classes[className]
 	p.server.classes[className] = &ScriptClass{name: className, script: classCode}
 	p.server.weaponMu.Unlock()
+	if err := p.server.saveClassFile(className, classCode); err != nil {
+		p.server.logger.Warning("Failed to save class %s: %v", className, err)
+	}
 	if !hasClass {
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_CLASSADD)
 		buf2.Write([]byte(className))
 		p.server.sendPacketToType(PLTYPE_ANYNC, buf2.Bytes())
 	}
-	p.server.logger.Info("Script %s %s by %s", className, map[bool]string{true: "added", false: "updated"}[!hasClass], p.accountName)
+	logMsg := fmt.Sprintf("Script %s %s by %s", className, map[bool]string{true: "added", false: "updated"}[!hasClass], p.accountName)
+	p.server.logger.Info(logMsg)
+	p.server.sendToNC(logMsg)
 	return true
 }
 func (p *Player) msgPLI_NC_LOCALNPCSGET(packet []byte) bool {
@@ -1773,9 +1786,12 @@ func (p *Player) msgPLI_NC_WEAPONLISTGET(packet []byte) bool {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_NC_WEAPONLISTGET)
 	p.server.weaponMu.RLock()
-	for weaponName := range p.server.weapons {
-		if weaponName != "" {
-			buf.WriteGChar(byte(len(weaponName))).Write([]byte(weaponName))
+	for weaponName, weapon := range p.server.weapons {
+		if weapon != nil {
+			weaponName = weapon.name
+		}
+		if weaponName != "" && (weapon == nil || !weapon.defPlayer) {
+			buf.WriteByte(byte(len(weaponName))).Write([]byte(weaponName))
 		}
 	}
 	p.server.weaponMu.RUnlock()
@@ -1794,8 +1810,8 @@ func (p *Player) msgPLI_NC_WEAPONGET(packet []byte) bool {
 		script := strings.ReplaceAll(weapon.script, "\n", "\xa7")
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_WEAPONGET)
-		buf2.WriteGChar(byte(len(weaponName))).Write([]byte(weaponName))
-		buf2.WriteGChar(byte(len(weapon.image))).Write([]byte(weapon.image))
+		buf2.WriteByte(byte(len(weaponName))).Write([]byte(weaponName))
+		buf2.WriteByte(byte(len(weapon.image))).Write([]byte(weapon.image))
 		buf2.Write([]byte(script))
 		p.send(buf2)
 	}
@@ -1816,18 +1832,28 @@ func (p *Player) msgPLI_NC_WEAPONADD(packet []byte) bool {
 	actionTaken := ""
 	weapon := p.server.GetWeapon(weaponName)
 	if weapon != nil {
+		if weapon.defPlayer || weapon.bytecodeFile != "" {
+			return true
+		}
 		weapon.image = weaponImage
 		weapon.script = weaponCode
+		p.server.updateWeaponForPlayers(weapon)
 		actionTaken = "updated"
 	} else {
 		newWeapon := NewWeapon(weaponName)
 		newWeapon.image = weaponImage
 		newWeapon.script = weaponCode
 		p.server.AddWeapon(newWeapon)
+		weapon = newWeapon
 		actionTaken = "added"
 	}
 	if actionTaken != "" {
-		p.server.logger.Info("Weapon/GUI-script %s %s by %s", weaponName, actionTaken, p.accountName)
+		if err := p.server.saveWeaponFile(weapon); err != nil {
+			p.server.logger.Warning("Failed to save weapon %s: %v", weaponName, err)
+		}
+		logMsg := fmt.Sprintf("Weapon/GUI-script %s %s by %s", weaponName, actionTaken, p.accountName)
+		p.server.logger.Info(logMsg)
+		p.server.sendToNC(logMsg)
 	}
 	return true
 }
@@ -1838,14 +1864,23 @@ func (p *Player) msgPLI_NC_WEAPONDELETE(packet []byte) bool {
 	}
 	buf := NewBufferFromBytes(packet[1:])
 	weaponName := buf.ReadString()
-	p.server.weaponMu.RLock()
-	_, exists := p.server.weapons[weaponName]
-	p.server.weaponMu.RUnlock()
-	if exists {
+	weapon := p.server.GetWeapon(weaponName)
+	if weapon != nil && !weapon.defPlayer {
 		p.server.DeleteWeapon(weaponName)
-		p.server.logger.Info("Weapon %s deleted by %s", weaponName, p.accountName)
+		if err := p.server.deleteWeaponFile(weaponName); err != nil {
+			p.server.logger.Warning("Failed to delete weapon file %s: %v", weaponName, err)
+		}
+		del := NewBuffer()
+		del.WriteByte(PLO_NPCWEAPONDEL)
+		del.Write([]byte(weaponName))
+		p.server.sendPacketToType(PLTYPE_ANYCLIENT, del.Bytes())
+		logMsg := fmt.Sprintf("Weapon %s deleted by %s", weaponName, p.accountName)
+		p.server.logger.Info(logMsg)
+		p.server.sendToNC(logMsg)
 	} else {
-		p.server.logger.Info("%s prob: weapon %s doesn't exist", p.accountName, weaponName)
+		logMsg := fmt.Sprintf("%s prob: weapon %s doesn't exist", p.accountName, weaponName)
+		p.server.logger.Info(logMsg)
+		p.server.sendToNC(logMsg)
 	}
 	return true
 }
@@ -1861,13 +1896,20 @@ func (p *Player) msgPLI_NC_CLASSDELETE(packet []byte) bool {
 	delete(p.server.classes, className)
 	p.server.weaponMu.Unlock()
 	if exists {
+		if err := p.server.deleteClassFile(className); err != nil {
+			p.server.logger.Warning("Failed to delete class file %s: %v", className, err)
+		}
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_CLASSDELETE)
 		buf2.Write([]byte(className))
 		p.server.sendPacketToType(PLTYPE_ANYNC, buf2.Bytes())
-		p.server.logger.Info("%s has deleted class %s", p.accountName, className)
+		logMsg := fmt.Sprintf("%s has deleted class %s", p.accountName, className)
+		p.server.logger.Info(logMsg)
+		p.server.sendToNC(logMsg)
 	} else {
-		p.server.logger.Info("error: %s does not exist on this server!", className)
+		logMsg := fmt.Sprintf("error: %s does not exist on this server!", className)
+		p.server.logger.Info(logMsg)
+		p.server.sendToNC(logMsg)
 	}
 	return true
 }

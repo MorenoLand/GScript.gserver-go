@@ -350,7 +350,7 @@ func TestNCNpcGetParsesPayloadAfterPacketID(t *testing.T) {
 	}
 }
 
-func TestNCWeaponListUsesEncodedNames(t *testing.T) {
+func TestNCWeaponListUsesRawNameLengths(t *testing.T) {
 	server := newLoginTestServer(t)
 	server.weapons = map[string]*Weapon{
 		"ControlWeapon": {name: "ControlWeapon", image: "control.png", script: "function onCreated() {}"},
@@ -364,7 +364,7 @@ func TestNCWeaponListUsesEncodedNames(t *testing.T) {
 
 	want := NewBuffer()
 	want.WriteByte(PLO_NC_WEAPONLISTGET + 32)
-	want.WriteString8Encoded("ControlWeapon")
+	want.WriteString8("ControlWeapon")
 	want.WriteByte('\n')
 	if !bytes.Contains(nc.outQueue, want.Bytes()) {
 		t.Fatalf("NC weapon list payload = % X, want % X", nc.outQueue, want.Bytes())
@@ -388,12 +388,37 @@ func TestNCWeaponGetParsesPayloadAfterPacketID(t *testing.T) {
 
 	want := NewBuffer()
 	want.WriteByte(PLO_NC_WEAPONGET + 32)
-	want.WriteString8Encoded("ControlWeapon")
-	want.WriteString8Encoded("control.png")
+	want.WriteString8("ControlWeapon")
+	want.WriteString8("control.png")
 	want.Write([]byte("line1\xa7line2"))
 	want.WriteByte('\n')
 	if !bytes.Contains(nc.outQueue, want.Bytes()) {
 		t.Fatalf("NC weapon get payload = % X, want % X", nc.outQueue, want.Bytes())
+	}
+}
+
+func TestNCClassEditUsesRawNameLength(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.classes = map[string]*ScriptClass{
+		"ControlClass": {name: "ControlClass", script: "line1\nline2"},
+	}
+	nc := NewPlayer(nil, server)
+	nc.playerType = PLTYPE_NC
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	packet := append([]byte{PLI_NC_CLASSEDIT}, []byte("ControlClass")...)
+	if !nc.msgPLI_NC_CLASSEDIT(packet) {
+		t.Fatalf("msgPLI_NC_CLASSEDIT returned false")
+	}
+
+	want := NewBuffer()
+	want.WriteByte(PLO_NC_CLASSGET + 32)
+	want.WriteString8("ControlClass")
+	want.Write([]byte(gtokenizeText("line1\nline2")))
+	want.WriteByte('\n')
+	if !bytes.Contains(nc.outQueue, want.Bytes()) {
+		t.Fatalf("NC class edit payload = % X, want % X", nc.outQueue, want.Bytes())
 	}
 }
 
@@ -423,10 +448,33 @@ func TestNCClassAddParsesPayloadAfterPacketID(t *testing.T) {
 	if !strings.Contains(classObj.script, "echo(\"hi\")") || strings.Contains(classObj.script, "\x01") {
 		t.Fatalf("class script was not untokenized correctly: %q", classObj.script)
 	}
+	classFile, err := server.config.LoadFile("scripts/ControlClass.txt")
+	if err != nil {
+		t.Fatalf("ControlClass was not saved: %v", err)
+	}
+	if !strings.Contains(string(classFile), "echo(\"hi\")") {
+		t.Fatalf("saved class script = %q", string(classFile))
+	}
 	want := []byte{PLO_NC_CLASSADD + 32}
 	want = append(want, []byte("ControlClass")...)
 	if !bytes.Contains(nc.outQueue, want) {
 		t.Fatalf("NC class add broadcast = % X, want % X", nc.outQueue, want)
+	}
+}
+
+func TestLoadClassesReadsScriptsFolder(t *testing.T) {
+	server := newLoginTestServer(t)
+	writeTestFile(t, server.config.GetBasePath(), "scripts/ControlClass.txt", "function onCreated() {\r\n  echo(\"hi\");\r\n}\r\n")
+	server.classes = make(map[string]*ScriptClass)
+
+	server.loadClasses(false)
+
+	classObj := server.classes["ControlClass"]
+	if classObj == nil {
+		t.Fatalf("ControlClass was not loaded")
+	}
+	if !strings.Contains(classObj.script, "echo(\"hi\")") {
+		t.Fatalf("loaded class script = %q", classObj.script)
 	}
 }
 
@@ -672,6 +720,7 @@ func TestRCPostLoginTailAnnouncesNewRCToAllRCs(t *testing.T) {
 
 func TestNCPostLoginTailAnnouncesNewNCToOtherNCs(t *testing.T) {
 	server := newLoginTestServer(t)
+	server.settings.Set("name", "Orion-Go")
 	existing := NewPlayer(nil, server)
 	existing.id = 2
 	existing.playerType = PLTYPE_NC
@@ -696,7 +745,7 @@ func TestNCPostLoginTailAnnouncesNewNCToOtherNCs(t *testing.T) {
 	if !bytes.Contains(existing.outQueue, want) {
 		t.Fatalf("existing NC did not receive new NC message: % X", existing.outQueue)
 	}
-	if !bytes.Contains(nc.outQueue, append([]byte{PLO_RC_CHAT + 32}, []byte("Welcome to the NPC-Server for moondeath")...)) {
+	if !bytes.Contains(nc.outQueue, append([]byte{PLO_RC_CHAT + 32}, []byte("Welcome to the NPC-Server for Orion-Go")...)) {
 		t.Fatalf("new NC did not receive welcome message: % X", nc.outQueue)
 	}
 	if !bytes.Contains(nc.outQueue, want) {

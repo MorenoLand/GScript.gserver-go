@@ -526,8 +526,86 @@ func parseDatabaseNPC(data string) *NPC {
 	return npc
 }
 
-func (s *Server) loadClasses(print bool) {}
-func (s *Server) loadMaps(print bool)    {}
+func (s *Server) loadClasses(print bool) {
+	files, err := s.config.ListFiles("scripts/")
+	if err != nil {
+		return
+	}
+	for _, file := range files {
+		if !strings.HasSuffix(strings.ToLower(file), ".txt") {
+			continue
+		}
+		data, err := s.config.LoadFile("scripts/" + file)
+		if err != nil {
+			continue
+		}
+		className := strings.TrimSuffix(file, filepath.Ext(file))
+		s.classes[className] = &ScriptClass{name: className, script: strings.ReplaceAll(string(data), "\r\n", "\n")}
+		if print {
+			s.log("       " + className + "\n")
+		}
+	}
+}
+
+func sanitizeWeaponFileName(name string) string {
+	replacer := strings.NewReplacer("\\", "_", "/", "_", "*", "@", ":", ";", "?", "!")
+	return replacer.Replace(name)
+}
+
+func (s *Server) saveWeaponFile(weapon *Weapon) error {
+	if s == nil || s.config == nil || weapon == nil || weapon.name == "" || weapon.defPlayer || weapon.bytecodeFile != "" {
+		return nil
+	}
+	var out strings.Builder
+	out.WriteString("GRAWP001\r\n")
+	out.WriteString("REALNAME ")
+	out.WriteString(weapon.name)
+	out.WriteString("\r\n")
+	out.WriteString("IMAGE ")
+	out.WriteString(weapon.image)
+	out.WriteString("\r\n")
+	if weapon.script != "" {
+		out.WriteString("SCRIPT\r\n")
+		script := strings.ReplaceAll(weapon.script, "\r\n", "\n")
+		out.WriteString(strings.ReplaceAll(script, "\n", "\r\n"))
+		if !strings.HasSuffix(script, "\n") {
+			out.WriteString("\r\n")
+		}
+		out.WriteString("SCRIPTEND\r\n")
+	}
+	return s.config.SaveFile("weapons/weapon"+sanitizeWeaponFileName(weapon.name)+".txt", []byte(out.String()))
+}
+
+func (s *Server) deleteWeaponFile(name string) error {
+	if s == nil || s.config == nil || name == "" {
+		return nil
+	}
+	err := s.config.DeleteFile("weapons/weapon" + sanitizeWeaponFileName(name) + ".txt")
+	if err != nil && os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+func (s *Server) saveClassFile(className, classCode string) error {
+	if s == nil || s.config == nil || className == "" {
+		return nil
+	}
+	return s.config.SaveFile("scripts/"+className+".txt", []byte(classCode))
+}
+
+func (s *Server) deleteClassFile(className string) error {
+	if s == nil || s.config == nil || className == "" {
+		return nil
+	}
+	err := s.config.DeleteFile("scripts/" + className + ".txt")
+	if err != nil && os.IsNotExist(err) {
+		return nil
+	}
+	return err
+}
+
+func (s *Server) loadMaps(print bool) {}
 func (s *Server) loadNpcs(print bool) {
 	files, err := s.config.ListFiles("npcs/")
 	if err != nil {
@@ -968,6 +1046,21 @@ func (s *Server) sendRCChat(message string) {
 		}
 	}
 }
+
+func (s *Server) sendToNC(message string) {
+	if s == nil {
+		return
+	}
+	if line, _, ok := strings.Cut(message, "\n"); ok {
+		message = line
+	}
+	message = strings.TrimRight(message, "\r")
+	if message == "" {
+		return
+	}
+	s.sendPacketToType(PLTYPE_ANYNC, rcChatPacket(message))
+}
+
 func (s *Server) sendPacketToAll(data []byte, excludeId uint16) {
 	s.playerMu.RLock()
 	defer s.playerMu.RUnlock()
@@ -1044,12 +1137,47 @@ func (s *Server) AddWeapon(weapon *Weapon) {
 func (s *Server) GetWeapon(name string) *Weapon {
 	s.weaponMu.RLock()
 	defer s.weaponMu.RUnlock()
-	return s.weapons[name]
+	if weapon := s.weapons[name]; weapon != nil {
+		return weapon
+	}
+	if weapon := s.weapons[strings.ToLower(name)]; weapon != nil {
+		return weapon
+	}
+	for _, weapon := range s.weapons {
+		if weapon != nil && strings.EqualFold(weapon.name, name) {
+			return weapon
+		}
+	}
+	return nil
 }
 func (s *Server) DeleteWeapon(name string) {
 	s.weaponMu.Lock()
 	defer s.weaponMu.Unlock()
 	delete(s.weapons, name)
+	delete(s.weapons, strings.ToLower(name))
+	for key, weapon := range s.weapons {
+		if weapon != nil && strings.EqualFold(weapon.name, name) {
+			delete(s.weapons, key)
+		}
+	}
+}
+
+func (s *Server) updateWeaponForPlayers(weapon *Weapon) {
+	if s == nil || weapon == nil || weapon.name == "" {
+		return
+	}
+	s.playerMu.RLock()
+	players := make([]*Player, 0, len(s.players))
+	for _, player := range s.players {
+		if player != nil && player.playerType&PLTYPE_ANYCLIENT != 0 && player.hasAccountWeapon(weapon.name) {
+			players = append(players, player)
+		}
+	}
+	s.playerMu.RUnlock()
+	for _, player := range players {
+		player.sendPLO_NPCWEAPONDEL(weapon.name)
+		player.sendAccountWeapon(weapon.name)
+	}
 }
 
 func (s *Server) GetServerTime() uint           { return s.serverTime }
@@ -1732,7 +1860,7 @@ func (p *Player) sendRCPostLoginTail() {
 func (p *Player) sendNCPostLoginTail() {
 	p.sendNCNPCList()
 	p.sendNCClassList()
-	p.sendPLO_RC_CHAT("Welcome to the NPC-Server for " + p.accountName)
+	p.sendPLO_RC_CHAT("Welcome to the NPC-Server for " + p.server.configuredName())
 
 	p.server.playerMu.RLock()
 	for _, other := range p.server.players {
@@ -1742,6 +1870,21 @@ func (p *Player) sendNCPostLoginTail() {
 	}
 	p.server.playerMu.RUnlock()
 	p.server.sendPacketToType(PLTYPE_ANYNC, rcChatPacket("New NC: "+p.accountName))
+}
+
+func (s *Server) configuredName() string {
+	if s == nil {
+		return "GServer"
+	}
+	if s.settings != nil {
+		if name := strings.TrimSpace(s.settings.Get("name")); name != "" {
+			return name
+		}
+	}
+	if name := strings.TrimSpace(s.name); name != "" {
+		return name
+	}
+	return "GServer"
 }
 
 func (p *Player) sendNCNPCList() {
