@@ -59,6 +59,10 @@ func (s *Server) compileGS2ForFeedback(scriptType, scriptName, script string) gs
 
 	bytecode, err := os.ReadFile(outputPath)
 	if err != nil {
+		msg := strings.TrimSpace(combined.String())
+		if msg != "" {
+			return gs2CompileResult{errText: msg}
+		}
 		return gs2CompileResult{errText: fmt.Sprintf("compiler did not write bytecode: %v", err)}
 	}
 	return gs2CompileResult{bytecode: bytecode}

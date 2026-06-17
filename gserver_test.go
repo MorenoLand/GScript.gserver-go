@@ -80,6 +80,10 @@ func TestGS2CompilerHelperProcess(t *testing.T) {
 		fmt.Fprintln(os.Stderr, "parser error occurred near line 1: bad syntax")
 		os.Exit(2)
 	}
+	if strings.Contains(string(data), "silent output failure") {
+		fmt.Fprintln(os.Stdout, " -> [ERROR] malformed input at line 1: silent output failure")
+		os.Exit(0)
+	}
 	payload := "bytecode:" + os.Getenv("GS2_SCRIPT_TYPE") + ":" + os.Getenv("GS2_SCRIPT_NAME")
 	if err := os.WriteFile(outputPath, []byte(payload), 0600); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -576,6 +580,40 @@ func TestNCWeaponAddReportsGS2CompilerErrors(t *testing.T) {
 	want := append([]byte{PLO_RC_CHAT + 32}, []byte("NC Error: parser error occurred near line 1: bad syntax")...)
 	if !bytes.Contains(nc.outQueue, want) {
 		t.Fatalf("NC compiler error response = % X, want contains % X", nc.outQueue, want)
+	}
+}
+
+func TestNCWeaponAddReportsCompilerOutputWhenOutputFileMissing(t *testing.T) {
+	t.Setenv("GO_WANT_GS2_HELPER_PROCESS", "1")
+	server := newLoginTestServer(t)
+	server.settings.Set("gs2compiler", os.Args[0])
+	server.settings.Set("gs2compilerargs", "-test.run=TestGS2CompilerHelperProcess --")
+	server.weapons = map[string]*Weapon{}
+	nc := NewPlayer(nil, server)
+	nc.id = 3
+	nc.playerType = PLTYPE_NC
+	nc.accountName = "moondeath"
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+
+	add := NewBuffer()
+	add.WriteByte(PLI_NC_WEAPONADD)
+	add.WriteGChar(byte(len("badweapon")))
+	add.Write([]byte("badweapon"))
+	add.WriteGChar(byte(len("bcalarmclock.png")))
+	add.Write([]byte("bcalarmclock.png"))
+	add.Write([]byte("//#CLIENTSIDE\xa7silent output failure"))
+
+	if !nc.msgPLI_NC_WEAPONADD(add.Bytes()) {
+		t.Fatalf("msgPLI_NC_WEAPONADD returned false")
+	}
+	if server.GetWeapon("badweapon") != nil {
+		t.Fatalf("bad weapon was added after compiler output failure")
+	}
+	want := append([]byte{PLO_RC_CHAT + 32}, []byte("NC Error: -> [ERROR] malformed input at line 1: silent output failure")...)
+	if !bytes.Contains(nc.outQueue, want) {
+		t.Fatalf("NC compiler missing-output response = % X, want contains % X", nc.outQueue, want)
 	}
 }
 
