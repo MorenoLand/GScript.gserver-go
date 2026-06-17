@@ -332,6 +332,7 @@ func TestNCNpcGetParsesPayloadAfterPacketID(t *testing.T) {
 	npc := NewNPC(DBNPC)
 	npc.id = 10000
 	npc.npcName = "Control-NPC"
+	npc.scriptType = "CONTROL"
 	npc.saves[0] = 7
 	if !server.AddNPC(npc) {
 		t.Fatalf("AddNPC returned false")
@@ -344,7 +345,14 @@ func TestNCNpcGetParsesPayloadAfterPacketID(t *testing.T) {
 		t.Fatalf("msgPLI_NC_NPCGET returned false")
 	}
 
-	want := append([]byte{PLO_NC_NPCATTRIBUTES + 32}, []byte(gtokenizeText("save0=7\n"))...)
+	wantDump := "Variables dump from npc Control-NPC\n\n" +
+		"Control-NPC.type: CONTROL\n" +
+		"\nAttributes:\n" +
+		"Control-NPC.id: 10000\n" +
+		"Control-NPC.name: Control-NPC\n" +
+		"Control-NPC.type: CONTROL\n" +
+		"Control-NPC.save[0]: 7\n"
+	want := append([]byte{PLO_NC_NPCATTRIBUTES + 32}, []byte(gtokenizeText(wantDump))...)
 	if !bytes.Contains(nc.outQueue, want) {
 		t.Fatalf("NC npc attributes payload = % X, want % X", nc.outQueue, want)
 	}
@@ -643,6 +651,48 @@ func TestNCClassAddParsesPayloadAfterPacketID(t *testing.T) {
 	}
 }
 
+func TestNCClassAddRefreshesClassForModernClients(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.classes = map[string]*ScriptClass{
+		"ControlClass": {name: "ControlClass", script: "old();"},
+	}
+	client := NewPlayer(nil, server)
+	client.id = 3
+	client.playerType = PLTYPE_CLIENT3
+	client.versionId = 300
+	client.queueOutgoing = true
+	client.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[client.id] = client
+
+	nc := NewPlayer(nil, server)
+	nc.id = 9
+	nc.playerType = PLTYPE_NC
+	nc.accountName = "moondeath"
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+
+	newScript := "function onCreated() {\n  echo(\"updated\");\n}"
+	packet := NewBuffer()
+	packet.WriteByte(PLI_NC_CLASSADD)
+	packet.WriteGChar(byte(len("ControlClass")))
+	packet.Write([]byte("ControlClass"))
+	packet.Write([]byte(gtokenizeText(newScript)))
+
+	if !nc.msgPLI_NC_CLASSADD(packet.Bytes()) {
+		t.Fatalf("msgPLI_NC_CLASSADD returned false")
+	}
+
+	payload := append([]byte{PLO_NPCWEAPONSCRIPT + 32}, []byte(newScript)...)
+	expectedLen := NewBuffer().WriteGInt(uint32(len(payload))).Bytes()
+	want := append([]byte{PLO_RAWDATA + 32}, expectedLen...)
+	want = append(want, '\n')
+	want = append(want, payload...)
+	if !bytes.Contains(client.outQueue, want) {
+		t.Fatalf("client did not receive class refresh: % X, want % X", client.outQueue, want)
+	}
+}
+
 func TestNCClassListPrefixesEachClassPacket(t *testing.T) {
 	server := newLoginTestServer(t)
 	server.classes = map[string]*ScriptClass{
@@ -717,6 +767,102 @@ func TestNCNPCAddBroadcastIsFramed(t *testing.T) {
 	frame := nc.outQueue[idx : idx+next]
 	if bytes.Contains(frame, []byte{PLO_RC_CHAT + 32}) {
 		t.Fatalf("NC npc add broadcast merged with following chat packet: % X", frame)
+	}
+}
+
+func TestNCNPCAddAttachesNPCToLevelAndNotifiesClients(t *testing.T) {
+	server := newLoginTestServer(t)
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	server.levels[level.levelName] = level
+
+	client := NewPlayer(nil, server)
+	client.id = 4
+	client.playerType = PLTYPE_CLIENT3
+	client.currentLevel = level
+	client.levelName = level.levelName
+	client.queueOutgoing = true
+	client.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[client.id] = client
+	level.addPlayer(client)
+
+	nc := NewPlayer(nil, server)
+	nc.id = 9
+	nc.playerType = PLTYPE_NC
+	nc.accountName = "moondeath"
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+
+	payload := gtokenizeText("Control-NPC\n10000\nCONTROL\nmoondeath\nonlinestartlocal.nw\n30\n30\n")
+	packet := append([]byte{PLI_NC_NPCADD}, []byte(payload)...)
+	if !nc.msgPLI_NC_NPCADD(packet) {
+		t.Fatalf("msgPLI_NC_NPCADD returned false")
+	}
+
+	npc := server.GetNPC(10000)
+	if npc == nil {
+		t.Fatalf("database NPC was not created")
+	}
+	if level.npcs[npc.id] != npc {
+		t.Fatalf("database NPC was not attached to level")
+	}
+	want := append([]byte{PLO_NPCPROPS + 32}, NewBuffer().WriteGInt(npc.id).Bytes()...)
+	if !bytes.Contains(client.outQueue, want) {
+		t.Fatalf("client did not receive new NPC props: % X, want prefix % X", client.outQueue, want)
+	}
+}
+
+func TestNCNPCWarpMovesLevelAndNotifiesNCs(t *testing.T) {
+	server := newLoginTestServer(t)
+	oldLevel := NewLevel()
+	oldLevel.levelName = "old.nw"
+	newLevel := NewLevel()
+	newLevel.levelName = "new.nw"
+	server.levels[oldLevel.levelName] = oldLevel
+	server.levels[newLevel.levelName] = newLevel
+
+	npc := NewNPC(DBNPC)
+	npc.id = 10000
+	npc.npcName = "Control-NPC"
+	npc.level = oldLevel
+	server.npcs[npc.id] = npc
+	oldLevel.npcs[npc.id] = npc
+
+	nc := NewPlayer(nil, server)
+	nc.id = 9
+	nc.playerType = PLTYPE_NC
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_NC_NPCWARP)
+	packet.WriteGInt(npc.id)
+	packet.WriteGChar(40)
+	packet.WriteGChar(42)
+	packet.Write([]byte("new.nw"))
+
+	if !nc.msgPLI_NC_NPCWARP(packet.Bytes()) {
+		t.Fatalf("msgPLI_NC_NPCWARP returned false")
+	}
+	if _, ok := oldLevel.npcs[npc.id]; ok {
+		t.Fatalf("npc remained in old level")
+	}
+	if newLevel.npcs[npc.id] != npc {
+		t.Fatalf("npc was not attached to new level")
+	}
+	if npc.level != newLevel || npc.x != 20*16 || npc.y != 21*16 {
+		t.Fatalf("npc state = level %v x=%d y=%d", npc.level, npc.x, npc.y)
+	}
+	want := NewBuffer()
+	want.WriteByte(PLO_NC_NPCADD + 32)
+	want.WriteGInt(npc.id)
+	want.WriteGChar(NPCPROP_CURLEVEL)
+	want.WriteString8Encoded("new.nw")
+	want.WriteByte('\n')
+	if !bytes.Contains(nc.outQueue, want.Bytes()) {
+		t.Fatalf("NC did not receive warp level update: % X, want % X", nc.outQueue, want.Bytes())
 	}
 }
 

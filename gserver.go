@@ -1309,6 +1309,64 @@ func (s *Server) updateWeaponForPlayers(weapon *Weapon) {
 	}
 }
 
+func (s *Server) updateClassForPlayers(classObj *ScriptClass) {
+	if s == nil || classObj == nil || classObj.script == "" {
+		return
+	}
+	s.playerMu.RLock()
+	players := make([]*Player, 0, len(s.players))
+	for _, player := range s.players {
+		if player != nil && player.playerType&PLTYPE_ANYCLIENT != 0 && player.supportsRawClassScript() {
+			players = append(players, player)
+		}
+	}
+	s.playerMu.RUnlock()
+	for _, player := range players {
+		player.sendRawNpcWeaponScript([]byte(classObj.script))
+	}
+}
+
+func (s *Server) warpDatabaseNPC(npc *NPC, level *Level, x, y int16) {
+	if s == nil || npc == nil || level == nil {
+		return
+	}
+	if oldLevel := npc.level; oldLevel != nil {
+		oldLevel.mu.Lock()
+		delete(oldLevel.npcs, npc.id)
+		oldLevel.mu.Unlock()
+	}
+	level.mu.Lock()
+	if level.npcs == nil {
+		level.npcs = make(map[uint32]*NPC)
+	}
+	level.npcs[npc.id] = npc
+	level.mu.Unlock()
+
+	npc.mu.Lock()
+	npc.level = level
+	npc.x = x
+	npc.y = y
+	npc.mu.Unlock()
+
+	for _, playerId := range level.getPlayers() {
+		s.playerMu.RLock()
+		player := s.players[playerId]
+		s.playerMu.RUnlock()
+		if player != nil && player.playerType&PLTYPE_ANYCLIENT != 0 {
+			player.sendPLO_NPCPROPS(npc)
+		}
+	}
+
+	if npc.npcName != "" {
+		buf := NewBuffer()
+		buf.WriteByte(PLO_NC_NPCADD)
+		buf.WriteGInt(npc.id)
+		buf.WriteGChar(NPCPROP_CURLEVEL)
+		buf.WriteGChar(byte(len(level.levelName))).Write([]byte(level.levelName))
+		s.sendBufferToType(PLTYPE_ANYNC, buf)
+	}
+}
+
 func (s *Server) GetServerTime() uint           { return s.serverTime }
 func (s *Server) GetServerStartTime() time.Time { return s.startTime }
 func (s *Server) GetLogger() *Logger            { return s.logger }
@@ -4402,6 +4460,10 @@ func playerSupportsPreciseMovement(p *Player) bool {
 	return p != nil && p.versionId >= 230
 }
 
+func (p *Player) supportsRawClassScript() bool {
+	return p != nil && p.versionId >= 300
+}
+
 func (p *Player) readPlayerPowerImageProp(sword bool, buf *Buffer) {
 	power := int(buf.ReadGChar())
 	if sword {
@@ -6433,6 +6495,74 @@ func (n *NPC) ensureFlagList() {
 	if n.flagList == nil {
 		n.flagList = make(map[string]string)
 	}
+}
+
+func (n *NPC) variableDump() string {
+	if n == nil {
+		return ""
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+
+	name := n.npcName
+	if name == "" {
+		name = fmt.Sprintf("npcs[%d]", n.id)
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "Variables dump from npc %s\n\n", name)
+	if n.scriptType != "" {
+		fmt.Fprintf(&out, "%s.type: %s\n", name, n.scriptType)
+	}
+	if n.scripter != "" {
+		fmt.Fprintf(&out, "%s.scripter: %s\n", name, n.scripter)
+	}
+	if n.level != nil && n.level.levelName != "" {
+		fmt.Fprintf(&out, "%s.level: %s\n", name, n.level.levelName)
+	}
+
+	out.WriteString("\nAttributes:\n")
+	fmt.Fprintf(&out, "%s.id: %d\n", name, n.id)
+	if n.image != "" {
+		fmt.Fprintf(&out, "%s.image: %s\n", name, n.image)
+	}
+	if n.script != "" {
+		fmt.Fprintf(&out, "%s.script: size: %d\n", name, len(n.script))
+	}
+	if n.character.headImage != "" {
+		fmt.Fprintf(&out, "%s.head: %s\n", name, n.character.headImage)
+	}
+	if n.character.bodyImage != "" {
+		fmt.Fprintf(&out, "%s.body: %s\n", name, n.character.bodyImage)
+	}
+	if n.npcName != "" {
+		fmt.Fprintf(&out, "%s.name: %s\n", name, n.npcName)
+	}
+	if n.scriptType != "" {
+		fmt.Fprintf(&out, "%s.type: %s\n", name, n.scriptType)
+	}
+	if n.level != nil && n.level.levelName != "" {
+		fmt.Fprintf(&out, "%s.level: %s\n", name, n.level.levelName)
+	}
+	for i, save := range n.saves {
+		if save > 0 {
+			fmt.Fprintf(&out, "%s.save[%d]: %d\n", name, i, save)
+		}
+	}
+	if n.timeout > 0 {
+		fmt.Fprintf(&out, "%s.timeout: %.2f\n", name, float32(n.timeout)*0.05)
+	}
+	if len(n.flagList) > 0 {
+		flags := make([]string, 0, len(n.flagList))
+		for flag := range n.flagList {
+			flags = append(flags, flag)
+		}
+		sort.Strings(flags)
+		out.WriteString("\nnpc.Flags:\n")
+		for _, flag := range flags {
+			fmt.Fprintf(&out, "%s.flags[\"%s\"]: %s\n", name, flag, n.flagList[flag])
+		}
+	}
+	return out.String()
 }
 
 // ============ WEAPON ============

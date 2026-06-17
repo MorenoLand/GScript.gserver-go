@@ -28,28 +28,9 @@ func (p *Player) msgPLI_NC_NPCGET(packet []byte) bool {
 	npcId := buf.ReadGInt()
 	npc := p.server.GetNPC(npcId)
 	if npc != nil {
-		var flagsStr string
-		npc.mu.Lock()
-		for k, v := range npc.saves {
-			if v != 0 {
-				flagsStr += fmt.Sprintf("save%d=%d\n", k, v)
-			}
-		}
-		if len(npc.flagList) > 0 {
-			flags := make([]string, 0, len(npc.flagList))
-			for flag := range npc.flagList {
-				flags = append(flags, flag)
-			}
-			sort.Strings(flags)
-			for _, flag := range flags {
-				flagsStr += fmt.Sprintf("%s=%s\n", flag, npc.flagList[flag])
-			}
-		}
-		npc.mu.Unlock()
-		flagsStr = gtokenizeText(flagsStr)
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_NPCATTRIBUTES)
-		buf2.Write([]byte(flagsStr))
+		buf2.Write([]byte(gtokenizeText(npc.variableDump())))
 		p.send(buf2)
 	}
 	return true
@@ -129,9 +110,12 @@ func (p *Player) msgPLI_NC_NPCWARP(packet []byte) bool {
 	if npc != nil {
 		level := p.server.GetLevel(npcLevelName)
 		if level != nil {
-			npc.x = int16(npcX * 16)
-			npc.y = int16(npcY * 16)
-			npc.level = level
+			p.server.warpDatabaseNPC(npc, level, int16(npcX*16), int16(npcY*16))
+			if npc.npcType == DBNPC {
+				if err := p.server.saveDatabaseNPCFile(npc); err != nil {
+					p.server.logger.Warning("Failed to save NPC %s: %v", npc.npcName, err)
+				}
+			}
 		}
 	}
 	return true
@@ -254,15 +238,37 @@ func (p *Player) msgPLI_NC_NPCADD(packet []byte) bool {
 	}
 	x, _ := strconv.ParseFloat(npcX, 32)
 	y, _ := strconv.ParseFloat(npcY, 32)
-	_, _ = strconv.ParseUint(npcIdStr, 10, 32)
+	npcId, _ := strconv.ParseUint(npcIdStr, 10, 32)
 	newNpc := NewNPC(DBNPC)
+	if npcId >= 1000 {
+		newNpc.setId(uint32(npcId))
+	}
 	newNpc.npcName = npcName
 	newNpc.scriptType = parts[2]
 	newNpc.scripter = npcScripter
 	newNpc.x = int16(x * 16)
 	newNpc.y = int16(y * 16)
 	newNpc.level = level
-	p.server.AddNPC(newNpc)
+	if !p.server.AddNPC(newNpc) {
+		message := "Error adding database npc: Id is in use"
+		p.server.logger.Info(message)
+		p.server.sendToNC(message)
+		return true
+	}
+	level.mu.Lock()
+	if level.npcs == nil {
+		level.npcs = make(map[uint32]*NPC)
+	}
+	level.npcs[newNpc.id] = newNpc
+	level.mu.Unlock()
+	for _, playerId := range level.getPlayers() {
+		p.server.playerMu.RLock()
+		player := p.server.players[playerId]
+		p.server.playerMu.RUnlock()
+		if player != nil && player.playerType&PLTYPE_ANYCLIENT != 0 {
+			player.sendPLO_NPCPROPS(newNpc)
+		}
+	}
 	if err := p.server.saveDatabaseNPCFile(newNpc); err != nil {
 		p.server.logger.Warning("Failed to save NPC %s: %v", newNpc.npcName, err)
 	}
@@ -317,6 +323,7 @@ func (p *Player) msgPLI_NC_CLASSADD(packet []byte) bool {
 	if err := p.server.saveClassFile(className, classCode); err != nil {
 		p.server.logger.Warning("Failed to save class %s: %v", className, err)
 	}
+	p.server.updateClassForPlayers(p.server.classes[className])
 	if !hasClass {
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_CLASSADD)
@@ -344,7 +351,7 @@ func (p *Player) msgPLI_NC_LOCALNPCSGET(packet []byte) bool {
 		npcDump += "Variables dump from level " + levelName + "\n"
 		for _, npc := range level.npcs {
 			if npc != nil {
-				npcDump += fmt.Sprintf("\nNPC %d: %s\n", npc.id, npc.npcName)
+				npcDump += "\n" + npc.variableDump() + "\n"
 			}
 		}
 		npcDump = gtokenizeText(npcDump)
