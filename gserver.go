@@ -1160,8 +1160,17 @@ func (s *Server) sendToNC(message string) {
 	if message == "" {
 		return
 	}
-	s.sendPacketToType(PLTYPE_ANYNC, rcChatPacket(message))
-	s.sendPacketToType(PLTYPE_ANYRC, rcChatPacket(message))
+	s.playerMu.RLock()
+	targets := make([]*Player, 0, len(s.players))
+	for _, p := range s.players {
+		if p != nil && p.playerType&PLTYPE_ANYCONTROL != 0 {
+			targets = append(targets, p)
+		}
+	}
+	s.playerMu.RUnlock()
+	for _, p := range targets {
+		p.send(NewBufferFromBytes(rcChatPacket(message)))
+	}
 }
 
 func (s *Server) sendPacketToAll(data []byte, excludeId uint16) {

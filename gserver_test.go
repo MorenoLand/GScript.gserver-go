@@ -513,8 +513,12 @@ func TestNCWeaponAddNotifiesRCChat(t *testing.T) {
 	}
 
 	want := append([]byte{PLO_RC_CHAT + 32}, []byte("Weapon/GUI-script test updated by moondeath")...)
+	want = append(want, '\n')
 	if !bytes.Contains(rc.outQueue, want) {
 		t.Fatalf("RC did not receive NC weapon update message: % X, want % X", rc.outQueue, want)
+	}
+	if !bytes.Contains(nc.outQueue, want) {
+		t.Fatalf("NC did not receive NC weapon update message: % X, want % X", nc.outQueue, want)
 	}
 }
 
