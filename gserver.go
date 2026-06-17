@@ -6529,7 +6529,8 @@ func (l *Level) getChestKey(chest *LevelChest) string {
 	if l == nil || chest == nil {
 		return ""
 	}
-	return fmt.Sprintf("%d:%d:%s", chest.x, chest.y, l.levelName)
+	levelName := filepath.Base(filepath.ToSlash(l.levelName))
+	return fmt.Sprintf("%d:%d:%s", chest.x, chest.y, levelName)
 }
 
 func isRespawningTile(tile int16) bool {

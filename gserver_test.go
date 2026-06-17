@@ -4142,6 +4142,51 @@ func TestOpenChestAwardsOnceAndPersistsChest(t *testing.T) {
 	}
 }
 
+func TestOpenChestPersistsOnlyLevelBasename(t *testing.T) {
+	dir := t.TempDir()
+	level := NewLevel()
+	level.levelName = "levels/onlinestartlocal.nw"
+	chest := &LevelChest{x: 20, y: 24, itemType: ItemGreenRupee, signIndex: 0}
+	level.chests = []*LevelChest{chest}
+	server := &Server{
+		logger:  NewLogger("", false),
+		config:  NewFileSystem(dir),
+		players: make(map[uint16]*Player),
+		levels:  map[string]*Level{"levels/onlinestartlocal.nw": level},
+	}
+	p := &Player{
+		id:            1,
+		server:        server,
+		currentLevel:  level,
+		playerType:    PLTYPE_CLIENT3,
+		loaded:        true,
+		queueOutgoing: true,
+	}
+	p.setServer(server)
+	p.accountName = "moondeath"
+	p.levelName = "levels/onlinestartlocal.nw"
+	p.character.nickName = "moondeath"
+	p.maxHitpoints = 3
+	p.character.hitpoints = 3
+	p.flagList = make(map[string]string)
+	server.players[p.id] = p
+	level.players = []uint16{p.id}
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_OPENCHEST).WriteGChar(20).WriteGChar(24)
+	if !p.msgPLI_OPENCHEST(packet.Bytes()) {
+		t.Fatalf("msgPLI_OPENCHEST returned false")
+	}
+
+	want := "20:24:onlinestartlocal.nw"
+	if len(p.chestList) != 1 || p.chestList[0] != want {
+		t.Fatalf("chestList = %#v, want %q", p.chestList, want)
+	}
+	if strings.Contains(p.chestList[0], "/") || strings.Contains(p.chestList[0], "\\") {
+		t.Fatalf("chest key contains path separator: %q", p.chestList[0])
+	}
+}
+
 func TestOpenChestSpinAttackSetsStatusFlag(t *testing.T) {
 	dir := t.TempDir()
 	level := NewLevel()
