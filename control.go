@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1529,6 +1530,16 @@ func (p *Player) msgPLI_NC_NPCGET(packet []byte) bool {
 				flagsStr += fmt.Sprintf("save%d=%d\n", k, v)
 			}
 		}
+		if len(npc.flagList) > 0 {
+			flags := make([]string, 0, len(npc.flagList))
+			for flag := range npc.flagList {
+				flags = append(flags, flag)
+			}
+			sort.Strings(flags)
+			for _, flag := range flags {
+				flagsStr += fmt.Sprintf("%s=%s\n", flag, npc.flagList[flag])
+			}
+		}
 		npc.mu.Unlock()
 		flagsStr = gtokenizeText(flagsStr)
 		buf2 := NewBuffer()
@@ -1549,6 +1560,9 @@ func (p *Player) msgPLI_NC_NPCDELETE(packet []byte) bool {
 	if npc != nil && npc.npcType == DBNPC {
 		npcName := npc.npcName
 		p.server.DeleteNPC(npcId)
+		if err := p.server.deleteDatabaseNPCFile(npcName); err != nil {
+			p.server.logger.Warning("Failed to delete NPC file %s: %v", npcName, err)
+		}
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_NPCDELETE)
 		buf2.WriteGInt(uint32(npcId))
@@ -1569,6 +1583,9 @@ func (p *Player) msgPLI_NC_NPCRESET(packet []byte) bool {
 	npc := p.server.GetNPC(npcId)
 	if npc != nil && npc.npcType == DBNPC {
 		npc.script = ""
+		if err := p.server.saveDatabaseNPCFile(npc); err != nil {
+			p.server.logger.Warning("Failed to save NPC %s: %v", npc.npcName, err)
+		}
 		logMsg := fmt.Sprintf("NPC script of %s reset by %s", npc.npcName, p.accountName)
 		p.server.logger.Info(logMsg)
 		p.server.sendToNC(logMsg)
@@ -1626,6 +1643,20 @@ func (p *Player) msgPLI_NC_NPCFLAGSGET(packet []byte) bool {
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_NPCFLAGS)
 		buf2.WriteGInt(uint32(npcId))
+		var flagsStr string
+		npc.mu.Lock()
+		if len(npc.flagList) > 0 {
+			flags := make([]string, 0, len(npc.flagList))
+			for flag := range npc.flagList {
+				flags = append(flags, flag)
+			}
+			sort.Strings(flags)
+			for _, flag := range flags {
+				flagsStr += fmt.Sprintf("%s=%s\n", flag, npc.flagList[flag])
+			}
+		}
+		npc.mu.Unlock()
+		buf2.Write([]byte(gtokenizeText(flagsStr)))
 		p.send(buf2)
 	}
 	return true
@@ -1641,6 +1672,9 @@ func (p *Player) msgPLI_NC_NPCSCRIPTSET(packet []byte) bool {
 	npc := p.server.GetNPC(npcId)
 	if npc != nil {
 		npc.script = npcScript
+		if err := p.server.saveDatabaseNPCFile(npc); err != nil {
+			p.server.logger.Warning("Failed to save NPC %s: %v", npc.npcName, err)
+		}
 		logMsg := fmt.Sprintf("NPC script of %s updated by %s", npc.npcName, p.accountName)
 		p.server.logger.Info(logMsg)
 		p.server.sendToNC(logMsg)
@@ -1651,6 +1685,38 @@ func (p *Player) msgPLI_NC_NPCFLAGSSET(packet []byte) bool {
 	if p.playerType&PLTYPE_ANYNC == 0 {
 		p.server.logger.Warning("[Hack] %s attempted NPCFLAGSSET (non-NC)", p.accountName)
 		return true
+	}
+	buf := NewBufferFromBytes(packet[1:])
+	npcId := buf.ReadGInt()
+	npcFlags := guntokenizeText(buf.ReadString())
+	npc := p.server.GetNPC(npcId)
+	if npc != nil {
+		newFlags := make(map[string]string)
+		for _, line := range strings.Split(npcFlags, "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			parts := strings.SplitN(line, "=", 2)
+			flagName := strings.TrimSpace(parts[0])
+			if flagName == "" {
+				continue
+			}
+			flagValue := ""
+			if len(parts) == 2 {
+				flagValue = parts[1]
+			}
+			newFlags[flagName] = flagValue
+		}
+		npc.mu.Lock()
+		npc.flagList = newFlags
+		npc.mu.Unlock()
+		if err := p.server.saveDatabaseNPCFile(npc); err != nil {
+			p.server.logger.Warning("Failed to save NPC %s: %v", npc.npcName, err)
+		}
+		logMsg := fmt.Sprintf("NPC flags of %s updated by %s", npc.npcName, p.accountName)
+		p.server.logger.Info(logMsg)
+		p.server.sendToNC(logMsg)
 	}
 	return true
 }
@@ -1684,11 +1750,15 @@ func (p *Player) msgPLI_NC_NPCADD(packet []byte) bool {
 	_, _ = strconv.ParseUint(npcIdStr, 10, 32)
 	newNpc := NewNPC(DBNPC)
 	newNpc.npcName = npcName
+	newNpc.scriptType = parts[2]
 	newNpc.scripter = npcScripter
 	newNpc.x = int16(x * 16)
 	newNpc.y = int16(y * 16)
 	newNpc.level = level
 	p.server.AddNPC(newNpc)
+	if err := p.server.saveDatabaseNPCFile(newNpc); err != nil {
+		p.server.logger.Warning("Failed to save NPC %s: %v", newNpc.npcName, err)
+	}
 	buf2 := NewBuffer()
 	buf2.WriteByte(PLO_NC_NPCADD)
 	buf2.WriteGInt(newNpc.id)

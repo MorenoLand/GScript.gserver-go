@@ -350,6 +350,89 @@ func TestNCNpcGetParsesPayloadAfterPacketID(t *testing.T) {
 	}
 }
 
+func TestNCNpcScriptSetSavesDatabaseNPC(t *testing.T) {
+	server := newLoginTestServer(t)
+	level := &Level{levelName: "onlinestartlocal.nw"}
+	server.AddLevel(level)
+	npc := NewNPC(DBNPC)
+	npc.id = 10000
+	npc.npcName = "Control-NPC"
+	npc.scriptType = "CONTROL"
+	npc.level = level
+	if !server.AddNPC(npc) {
+		t.Fatalf("AddNPC returned false")
+	}
+	nc := NewPlayer(nil, server)
+	nc.playerType = PLTYPE_NC
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_NC_NPCSCRIPTSET)
+	packet.WriteGInt(npc.id)
+	packet.Write([]byte(gtokenizeText("function onCreated() {\n  echo(\"saved\");\n}")))
+	if !nc.msgPLI_NC_NPCSCRIPTSET(packet.Bytes()) {
+		t.Fatalf("msgPLI_NC_NPCSCRIPTSET returned false")
+	}
+
+	data, err := server.config.LoadFile("npcs/npcControl-NPC.txt")
+	if err != nil {
+		t.Fatalf("NPC script was not saved: %v", err)
+	}
+	if !strings.Contains(string(data), "echo(\"saved\")") {
+		t.Fatalf("saved NPC file = %q", string(data))
+	}
+}
+
+func TestNCNpcFlagsGetSetRoundTrip(t *testing.T) {
+	server := newLoginTestServer(t)
+	npc := NewNPC(DBNPC)
+	npc.id = 10000
+	npc.npcName = "Control-NPC"
+	npc.flagList["old"] = "1"
+	if !server.AddNPC(npc) {
+		t.Fatalf("AddNPC returned false")
+	}
+	nc := NewPlayer(nil, server)
+	nc.playerType = PLTYPE_NC
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	setPacket := NewBuffer()
+	setPacket.WriteByte(PLI_NC_NPCFLAGSSET)
+	setPacket.WriteGInt(npc.id)
+	setPacket.Write([]byte(gtokenizeText("flag.one=alpha\nflag.two=beta\n")))
+	if !nc.msgPLI_NC_NPCFLAGSSET(setPacket.Bytes()) {
+		t.Fatalf("msgPLI_NC_NPCFLAGSSET returned false")
+	}
+	if got := npc.flagList["flag.one"]; got != "alpha" {
+		t.Fatalf("npc flag flag.one = %q, want alpha", got)
+	}
+	if _, ok := npc.flagList["old"]; ok {
+		t.Fatalf("old flag was not replaced: %#v", npc.flagList)
+	}
+	data, err := server.config.LoadFile("npcs/npcControl-NPC.txt")
+	if err != nil {
+		t.Fatalf("NPC flags were not saved: %v", err)
+	}
+	if !strings.Contains(string(data), "FLAG flag.one=alpha") || !strings.Contains(string(data), "FLAG flag.two=beta") {
+		t.Fatalf("saved NPC flags file = %q", string(data))
+	}
+
+	nc.outQueue = nil
+	getPacket := NewBuffer()
+	getPacket.WriteByte(PLI_NC_NPCFLAGSGET)
+	getPacket.WriteGInt(npc.id)
+	if !nc.msgPLI_NC_NPCFLAGSGET(getPacket.Bytes()) {
+		t.Fatalf("msgPLI_NC_NPCFLAGSGET returned false")
+	}
+	want := append([]byte{PLO_NC_NPCFLAGS + 32}, NewBuffer().WriteGInt(npc.id).Bytes()...)
+	want = append(want, []byte(gtokenizeText("flag.one=alpha\nflag.two=beta\n"))...)
+	if !bytes.Contains(nc.outQueue, want) {
+		t.Fatalf("NC npc flags payload = % X, want % X", nc.outQueue, want)
+	}
+}
+
 func TestNCWeaponListUsesRawNameLengths(t *testing.T) {
 	server := newLoginTestServer(t)
 	server.weapons = map[string]*Weapon{

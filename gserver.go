@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -515,6 +516,17 @@ func parseDatabaseNPC(data string) *NPC {
 					npc.saves[i] = byte(save)
 				}
 			}
+		case "FLAG":
+			flagParts := strings.SplitN(value, "=", 2)
+			flagName := strings.TrimSpace(flagParts[0])
+			flagValue := ""
+			if len(flagParts) == 2 {
+				flagValue = flagParts[1]
+			}
+			if flagName != "" {
+				npc.ensureFlagList()
+				npc.flagList[flagName] = flagValue
+			}
 		}
 	}
 	if inScript && len(scriptLines) > 0 {
@@ -524,6 +536,84 @@ func parseDatabaseNPC(data string) *NPC {
 		return nil
 	}
 	return npc
+}
+
+func (s *Server) saveDatabaseNPCFile(npc *NPC) error {
+	if s == nil || s.config == nil || npc == nil || npc.npcType != DBNPC || npc.npcName == "" {
+		return nil
+	}
+	levelName := ""
+	if npc.level != nil {
+		levelName = npc.level.levelName
+	}
+	var out strings.Builder
+	out.WriteString("GRNPC001\r\n")
+	fmt.Fprintf(&out, "NAME %s\r\n", npc.npcName)
+	fmt.Fprintf(&out, "ID %d\r\n", npc.id)
+	fmt.Fprintf(&out, "TYPE %s\r\n", npc.scriptType)
+	fmt.Fprintf(&out, "SCRIPTER %s\r\n", npc.scripter)
+	fmt.Fprintf(&out, "IMAGE %s\r\n", npc.image)
+	fmt.Fprintf(&out, "STARTLEVEL %s\r\n", levelName)
+	fmt.Fprintf(&out, "STARTX %.2f\r\n", float64(npc.x)/16.0)
+	fmt.Fprintf(&out, "STARTY %.2f\r\n", float64(npc.y)/16.0)
+	fmt.Fprintf(&out, "NICK %s\r\n", npc.character.nickName)
+	fmt.Fprintf(&out, "ANI %s\r\n", npc.character.gani)
+	fmt.Fprintf(&out, "HP %d\r\n", npc.character.hitpoints)
+	fmt.Fprintf(&out, "GRALATS %d\r\n", npc.character.gralats)
+	fmt.Fprintf(&out, "ARROWS %d\r\n", npc.character.arrows)
+	fmt.Fprintf(&out, "BOMBS %d\r\n", npc.character.bombs)
+	fmt.Fprintf(&out, "GLOVEP %d\r\n", npc.character.glovePower)
+	fmt.Fprintf(&out, "SWORDP %d\r\n", npc.character.swordPower)
+	fmt.Fprintf(&out, "SHIELDP %d\r\n", npc.character.shieldPower)
+	fmt.Fprintf(&out, "HEAD %s\r\n", npc.character.headImage)
+	fmt.Fprintf(&out, "BODY %s\r\n", npc.character.bodyImage)
+	fmt.Fprintf(&out, "SWORD %s\r\n", npc.character.swordImage)
+	fmt.Fprintf(&out, "SHIELD %s\r\n", npc.character.shieldImage)
+	fmt.Fprintf(&out, "HORSE %s\r\n", npc.character.horseImage)
+	fmt.Fprintf(&out, "COLORS %d,%d,%d,%d,%d\r\n", npc.character.colors[0], npc.character.colors[1], npc.character.colors[2], npc.character.colors[3], npc.character.colors[4])
+	fmt.Fprintf(&out, "SPRITE %d\r\n", npc.character.sprite)
+	fmt.Fprintf(&out, "AP %d\r\n", npc.character.ap)
+	fmt.Fprintf(&out, "TIMEOUT %d\r\n", npc.timeout)
+	out.WriteString("LAYER 0\r\nSHAPETYPE 0\r\n")
+	if npc.width > 0 || npc.height > 0 {
+		fmt.Fprintf(&out, "SHAPE %d %d\r\n", npc.width, npc.height)
+	} else {
+		out.WriteString("SHAPE 32 48\r\n")
+	}
+	saveParts := make([]string, len(npc.saves))
+	for i, save := range npc.saves {
+		saveParts[i] = strconv.Itoa(int(save))
+	}
+	fmt.Fprintf(&out, "SAVEARR %s\r\n", strings.Join(saveParts, ","))
+	if len(npc.flagList) > 0 {
+		flags := make([]string, 0, len(npc.flagList))
+		for flag := range npc.flagList {
+			flags = append(flags, flag)
+		}
+		sort.Strings(flags)
+		for _, flag := range flags {
+			fmt.Fprintf(&out, "FLAG %s=%s\r\n", flag, npc.flagList[flag])
+		}
+	}
+	out.WriteString("NPCSCRIPT\r\n")
+	script := strings.ReplaceAll(npc.script, "\r\n", "\n")
+	out.WriteString(strings.ReplaceAll(script, "\n", "\r\n"))
+	if !strings.HasSuffix(script, "\n") {
+		out.WriteString("\r\n")
+	}
+	out.WriteString("NPCSCRIPTEND\r\n")
+	return s.config.SaveFile("npcs/npc"+npc.npcName+".txt", []byte(out.String()))
+}
+
+func (s *Server) deleteDatabaseNPCFile(npcName string) error {
+	if s == nil || s.config == nil || npcName == "" {
+		return nil
+	}
+	err := s.config.DeleteFile("npcs/npc" + npcName + ".txt")
+	if err != nil && os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 func (s *Server) loadClasses(print bool) {
@@ -6281,6 +6371,7 @@ type NPC struct {
 	visFlags, blockFlags          byte
 	hurtX, hurtY                  float32
 	saves                         [10]byte
+	flagList                      map[string]string
 	character                     Character
 	weaponName                    string
 	scriptData                    string
@@ -6288,11 +6379,16 @@ type NPC struct {
 }
 
 func NewNPC(npcType NPCType) *NPC {
-	return &NPC{id: 0, npcType: npcType, x: 30 * 16, y: 30 * 16, z: 0, saves: [10]byte{}, level: nil}
+	return &NPC{id: 0, npcType: npcType, x: 30 * 16, y: 30 * 16, z: 0, saves: [10]byte{}, flagList: make(map[string]string), level: nil}
 }
 func (n *NPC) setId(id uint32) { n.id = id }
 func (n *NPC) getId() uint32   { return n.id }
 func (n *NPC) runTimeout()     { /* TODO: Implement timeout event */ }
+func (n *NPC) ensureFlagList() {
+	if n.flagList == nil {
+		n.flagList = make(map[string]string)
+	}
+}
 
 // ============ WEAPON ============
 type Weapon struct {
