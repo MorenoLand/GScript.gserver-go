@@ -643,6 +643,27 @@ func TestNCClassListPrefixesEachClassPacket(t *testing.T) {
 	}
 }
 
+func TestNCLevelListGetUsesGTokenizedLevelNames(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.levels = map[string]*Level{
+		"alpha.nw": {levelName: "alpha.nw"},
+		"beta.nw":  {levelName: "beta.nw"},
+	}
+	nc := NewPlayer(nil, server)
+	nc.playerType = PLTYPE_NC
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	if !nc.msgPLI_NC_LEVELLISTGET([]byte{PLI_NC_LEVELLISTGET}) {
+		t.Fatalf("msgPLI_NC_LEVELLISTGET returned false")
+	}
+
+	want := append([]byte{PLO_NC_LEVELLIST + 32}, []byte("alpha.nw,beta.nw\n")...)
+	if !bytes.Equal(nc.outQueue, want) {
+		t.Fatalf("NC level list = % X, want % X", nc.outQueue, want)
+	}
+}
+
 func TestNCNPCAddBroadcastIsFramed(t *testing.T) {
 	server := newLoginTestServer(t)
 	level := &Level{levelName: "onlinestartlocal.nw"}

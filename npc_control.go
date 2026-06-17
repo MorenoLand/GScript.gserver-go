@@ -493,18 +493,20 @@ func (p *Player) msgPLI_NC_LEVELLISTGET(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted LEVELLISTGET (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBuffer()
-	buf.WriteByte(PLO_NC_LEVELLIST)
 	p.server.levelMu.RLock()
+	levelNames := make([]string, 0, len(p.server.levels))
 	for levelName := range p.server.levels {
-		buf.Write([]byte(levelName))
-		buf.WriteByte('\n')
+		levelNames = append(levelNames, levelName)
 	}
 	p.server.levelMu.RUnlock()
-	levelList := strings.ReplaceAll(string(buf.Bytes()[1:]), "\n", "\x01")
+	sort.Strings(levelNames)
+	levelList := ""
+	for _, levelName := range levelNames {
+		levelList += levelName + "\n"
+	}
 	buf2 := NewBuffer()
 	buf2.WriteByte(PLO_NC_LEVELLIST)
-	buf2.Write([]byte(levelList))
+	buf2.Write([]byte(gtokenizeText(levelList)))
 	p.send(buf2)
 	return true
 }
