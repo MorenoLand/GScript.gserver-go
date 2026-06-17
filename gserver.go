@@ -2171,8 +2171,10 @@ func (p *Player) sendStaffGuilds() {
 	}
 	if buf.Len() > 1 {
 		packet := NewBufferFromBytes(buf.Bytes()[:len(buf.Bytes())-1])
+		packet.WriteByte('\n')
 		p.sendPacket(packet.Bytes())
 	} else {
+		buf.WriteByte('\n')
 		p.sendPacket(buf.Bytes())
 	}
 }
@@ -2199,8 +2201,10 @@ func (p *Player) sendStatusList() {
 	}
 	if buf.Len() > 1 {
 		packet := NewBufferFromBytes(buf.Bytes()[:len(buf.Bytes())-1])
+		packet.WriteByte('\n')
 		p.sendPacket(packet.Bytes())
 	} else {
+		buf.WriteByte('\n')
 		p.sendPacket(buf.Bytes())
 	}
 }
@@ -3442,8 +3446,7 @@ func (p *Player) sendPLO_EXPLOSION(x, y int16, power int) bool {
 func (p *Player) sendPLO_ADDPLAYER(other *Player) bool {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_ADDPLAYER).WriteGShort(other.id)
-	buf.WriteGChar(byte(len(other.accountName)))
-	buf.Write([]byte(other.accountName))
+	buf.WriteString8Encoded(other.accountName)
 	levelName := other.levelName
 	if levelName == "" {
 		levelName = " "

@@ -1566,6 +1566,38 @@ func TestRCPostLoginTailSendsStaffGuildDefinitions(t *testing.T) {
 	}
 }
 
+func TestAddPlayerPacketUsesEncodedAccountLength(t *testing.T) {
+	server := newLoginTestServer(t)
+	rc := NewPlayer(nil, server)
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	npc := NewPlayer(nil, server)
+	npc.id = 1
+	npc.accountName = "(npcserver)"
+	npc.setNickname("NPC-Server (Server)")
+	npc.communityName = "(npcserver)"
+
+	if !rc.sendPLO_ADDPLAYER(npc) {
+		t.Fatal("sendPLO_ADDPLAYER returned false")
+	}
+
+	payload := bytes.TrimSuffix(rc.outQueue, []byte{'\n'})
+	buf := NewBufferFromBytes(payload)
+	if got := buf.ReadByte(); got != PLO_ADDPLAYER+32 {
+		t.Fatalf("packet id = %d, want %d", got, PLO_ADDPLAYER+32)
+	}
+	if got := buf.ReadGShort(); got != npc.id {
+		t.Fatalf("player id = %d, want %d", got, npc.id)
+	}
+	account := string(buf.ReadBytes(int(buf.ReadGChar())))
+	if account != "(npcserver)" {
+		t.Fatalf("account = %q, want (npcserver); packet=% X", account, rc.outQueue)
+	}
+	if got := buf.ReadGChar(); got != PLPROP_CURLEVEL {
+		t.Fatalf("first prop = %d, want PLPROP_CURLEVEL", got)
+	}
+}
+
 func TestRCAdminMessageUsesRawPayload(t *testing.T) {
 	server := newLoginTestServer(t)
 	rc := NewPlayer(nil, server)
@@ -2636,8 +2668,10 @@ func TestPostLoginTailSendsListProcessesAfterStatusAndPlayerExchange(t *testing.
 
 	want := []byte{PLO_STAFFGUILDS + 32}
 	want = append(want, []byte("\"Staff\"")...)
+	want = append(want, '\n')
 	want = append(want, PLO_STATUSLIST+32)
 	want = append(want, []byte("Online,Away")...)
+	want = append(want, '\n')
 	want = append(want, PLO_LISTPROCESSES+32, '\n')
 
 	clientConn.SetReadDeadline(time.Now().Add(time.Second))
