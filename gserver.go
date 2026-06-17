@@ -4765,15 +4765,11 @@ func (p *Player) msgPLI_REQUESTTEXT(packet []byte) bool {
 	p.server.logger.Debug("REQUESTTEXT: weapon=%s type=%s option=%s raw=%q", weapon, type_, option, rawText)
 	if type_ == "lister" {
 		if option == "simplelist" {
-			if p.server.serverList != nil && p.server.serverList.connected {
-				p.server.serverList.SendPlayerTextPacket(SVO_REQUESTLIST, p.id, strings.Join([]string{weapon, type_, "simpleserverlist"}, "\x01")+"\x01")
-			} else {
+			if !p.server.sendPlayerTextToListservers(SVO_REQUESTLIST, p.id, strings.Join([]string{weapon, type_, "simpleserverlist"}, "\x01")+"\x01") {
 				p.sendServerTextFields(weapon, type_, "simpleserverlist")
 			}
 		} else if option == "rebornlist" {
-			if p.server.serverList != nil && p.server.serverList.connected {
-				p.server.serverList.SendPlayerTextPacket(SVO_REQUESTLIST, p.id, rawText)
-			}
+			p.server.sendPlayerTextToListservers(SVO_REQUESTLIST, p.id, rawText)
 		} else if option == "subscriptions" {
 			p.sendServerTextFields(weapon, type_, "subscriptions", "unlimited", "Unlimited Subscription", "\"\"")
 		} else if option == "bantypes" {
@@ -4783,16 +4779,12 @@ func (p *Player) msgPLI_REQUESTTEXT(packet []byte) bool {
 			p.sendServerTextFields(weapon, type_, "globalitems", p.accountName,
 				"autobill=1\x01autobillmine=1\x01bundle=1\x01creationtime=1212768763\x01currenttime=1353248504\x01description=Gives\x01duration=2629800\x01flags=subscription\x01icon=graalicon_big.png\x01itemid=1\x01lifetime=1\x01owner=global\x01ownertype=server\x01price=100\x01quantity=988506\x01status=available\x01title=Gold\x01tradable=1\x01typeid=62\x01world=global")
 		} else if option == "serverinfo" {
-			if p.server.serverList != nil && p.server.serverList.connected {
-				p.server.serverList.SendPlayerTextPacket(SVO_REQUESTSVRINFO, p.id, rawText)
-			} else {
+			if !p.server.sendPlayerTextToListservers(SVO_REQUESTSVRINFO, p.id, rawText) {
 				p.sendServerTextFields(weapon, type_, option, p.server.name)
 			}
 		}
 	} else if type_ == "pmservers" || type_ == "pmguilds" {
-		if p.server.serverList != nil && p.server.serverList.connected {
-			p.server.serverList.SendPlayerTextPacket(SVO_REQUESTLIST, p.id, rawText)
-		} else {
+		if !p.server.sendPlayerTextToListservers(SVO_REQUESTLIST, p.id, rawText) {
 			p.sendServerTextFields(weapon, type_, option)
 		}
 	} else if type_ == "pmserverplayers" {
@@ -4832,9 +4824,7 @@ func (p *Player) msgPLI_SENDTEXT(packet []byte) bool {
 	if type_ == "lister" {
 		option := parts[2]
 		if option == "verifybuddies" || option == "addbuddy" || option == "deletebuddy" {
-			if p.server.serverList != nil && p.server.serverList.connected {
-				p.server.serverList.SendPlayerTextPacket(SVO_REQUESTLIST, p.id, rawText)
-			}
+			p.server.sendPlayerTextToListservers(SVO_REQUESTLIST, p.id, rawText)
 		}
 	}
 	p.server.logger.Debug("SENDTEXT: weapon=%s, type=%s", weapon, type_)

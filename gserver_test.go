@@ -5029,6 +5029,50 @@ func TestRequestTextForwardsListRequestWithPlayerId(t *testing.T) {
 	}
 }
 
+func TestRequestTextForwardsListRequestToAllConnectedListservers(t *testing.T) {
+	server := &Server{logger: NewLogger("", false)}
+	first := &ServerList{
+		server:    server,
+		connected: true,
+		enabled:   true,
+		codec:     ENCRYPT_GEN_1,
+		sendQueue: make(chan []byte, 1),
+	}
+	second := &ServerList{
+		server:    server,
+		connected: true,
+		enabled:   true,
+		codec:     ENCRYPT_GEN_1,
+		sendQueue: make(chan []byte, 1),
+	}
+	server.serverLists = []*ServerList{first, second}
+	server.serverList = first
+	p := &Player{id: 321, server: server}
+
+	request := "GraalEngine\x01pmservers\x01all\x01"
+	if !p.msgPLI_REQUESTTEXT(append([]byte{PLI_REQUESTTEXT}, []byte(request)...)) {
+		t.Fatal("msgPLI_REQUESTTEXT returned false")
+	}
+
+	want := NewBuffer().
+		WriteGChar(SVO_REQUESTLIST).
+		WriteGShort(321).
+		Write([]byte(request)).
+		WriteByte('\n').
+		Bytes()
+	for name, queue := range map[string]chan []byte{"first": first.sendQueue, "second": second.sendQueue} {
+		var got []byte
+		select {
+		case got = <-queue:
+		case <-time.After(time.Second):
+			t.Fatalf("timed out waiting for %s listserver request", name)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("%s forwarded list request = % X, want % X", name, got, want)
+		}
+	}
+}
+
 func TestRequestTextForwardsTwoFieldSimpleListToListserver(t *testing.T) {
 	server := &Server{logger: NewLogger("", false)}
 	sl := &ServerList{

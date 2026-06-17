@@ -42,6 +42,30 @@ func (s *Server) listserverEndpoints() []listserverEndpoint {
 	return endpoints
 }
 
+func (s *Server) sendPlayerTextToListservers(packetId byte, playerID uint16, text string) bool {
+	if s == nil {
+		return false
+	}
+	sent := false
+	seen := make(map[*ServerList]bool)
+	for _, serverList := range s.serverLists {
+		if serverList == nil || seen[serverList] {
+			continue
+		}
+		seen[serverList] = true
+		if !serverList.connected {
+			continue
+		}
+		serverList.SendPlayerTextPacket(packetId, playerID, text)
+		sent = true
+	}
+	if s.serverList != nil && !seen[s.serverList] && s.serverList.connected {
+		s.serverList.SendPlayerTextPacket(packetId, playerID, text)
+		sent = true
+	}
+	return sent
+}
+
 func splitCommaList(value string) []string {
 	parts := strings.Split(value, ",")
 	out := make([]string, 0, len(parts))
