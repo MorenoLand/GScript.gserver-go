@@ -5097,6 +5097,12 @@ func (p *Player) msgPLI_SHOOT2(packet []byte) bool {
 func (p *Player) msgPLI_SERVERWARP(packet []byte) bool {
 	serverName := string(packet[1:])
 	p.server.logger.Debug("SERVERWARP to %s", serverName)
+	if serverName == "" {
+		return true
+	}
+	if !p.server.sendPlayerTextToListservers(SVO_SERVERINFO, p.id, serverName) {
+		p.server.logger.Warning("SERVERWARP requested by %s but no listserver is connected", p.accountName)
+	}
 	return true
 }
 func (p *Player) msgPLI_PROCESSLIST(packet []byte) bool {
@@ -7268,7 +7274,7 @@ func (sl *ServerList) handleListPacket(packetId uint8, data []byte) {
 	case SVI_FILEDATA, SVI_FILEDATA2, SVI_FILEDATA3:
 	case SVI_FILEEND, SVI_FILEEND2, SVI_FILEEND3:
 	case SVI_SERVERINFO:
-		sl.server.logger.Debug("Server info received")
+		sl.handleServerInfo(data)
 	case SVI_REQUESTTEXT:
 		sl.handleRequestText(data)
 	case SVI_SENDTEXT:
@@ -7295,7 +7301,7 @@ func (sl *ServerList) processPacket(data []byte) {
 	case SVI_FILEDATA, SVI_FILEDATA2, SVI_FILEDATA3:
 	case SVI_FILEEND, SVI_FILEEND2, SVI_FILEEND3:
 	case SVI_SERVERINFO:
-		sl.server.logger.Debug("Server info received")
+		sl.handleServerInfo(data[1:])
 	case SVI_ERRMSG:
 		sl.server.logger.Error("List server error: %s", string(data[1:]))
 	case SVI_PING:
@@ -7346,6 +7352,25 @@ func (sl *ServerList) handleRequestText(data []byte) {
 
 func (sl *ServerList) handleSendText(data []byte) {
 	sl.server.logger.Debug("[LISTSERVER] SENDTEXT: %s", string(data))
+}
+
+func (sl *ServerList) handleServerInfo(data []byte) {
+	if len(data) < 2 || sl.server == nil {
+		return
+	}
+	buf := NewBufferFromBytes(data)
+	playerID := buf.ReadGShort()
+	player := sl.server.GetPlayer(playerID)
+	if player == nil {
+		return
+	}
+	if player.versionId > 0 && player.versionId < 210 {
+		return
+	}
+	serverPacket := data[buf.read:]
+	out := NewBuffer()
+	out.WriteByte(PLO_SERVERWARP).Write(serverPacket)
+	player.send(out)
 }
 
 func (sl *ServerList) sendPacket(packet []byte) {

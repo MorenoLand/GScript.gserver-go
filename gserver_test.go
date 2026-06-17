@@ -6322,6 +6322,66 @@ func TestRequestTextForwardsListRequestWithPlayerId(t *testing.T) {
 	}
 }
 
+func TestServerWarpRequestsServerInfoFromListserver(t *testing.T) {
+	server := &Server{logger: NewLogger("", false)}
+	sl := &ServerList{
+		server:    server,
+		connected: true,
+		enabled:   true,
+		codec:     ENCRYPT_GEN_1,
+		sendQueue: make(chan []byte, 1),
+	}
+	server.serverList = sl
+	p := &Player{id: 321, server: server}
+
+	if !p.msgPLI_SERVERWARP(append([]byte{PLI_SERVERWARP}, []byte("Testbed")...)) {
+		t.Fatal("msgPLI_SERVERWARP returned false")
+	}
+
+	var got []byte
+	select {
+	case got = <-sl.sendQueue:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for serverwarp listserver request")
+	}
+	want := NewBuffer().
+		WriteGChar(SVO_SERVERINFO).
+		WriteGShort(321).
+		Write([]byte("Testbed")).
+		WriteByte('\n').
+		Bytes()
+	if !bytes.Equal(got, want) {
+		t.Fatalf("serverwarp request = % X, want % X", got, want)
+	}
+}
+
+func TestServerListServerInfoWarpsTargetPlayer(t *testing.T) {
+	server := &Server{
+		logger:  NewLogger("", false),
+		players: make(map[uint16]*Player),
+	}
+	p := &Player{
+		id:            321,
+		server:        server,
+		versionId:     222,
+		queueOutgoing: true,
+		encryption:    *NewEncryption(),
+	}
+	p.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[p.id] = p
+	sl := &ServerList{server: server}
+
+	serverPacket := []byte("P Testbed 127.0.0.1:14802")
+	data := NewBuffer().WriteGShort(p.id).Write(serverPacket).Bytes()
+	sl.handleListPacket(SVI_SERVERINFO, data)
+
+	want := append([]byte{PLO_SERVERWARP + 32}, serverPacket...)
+	want = append(want, '\n')
+	if !bytes.Equal(p.outQueue, want) {
+		t.Fatalf("serverwarp response = % X, want % X", p.outQueue, want)
+	}
+}
+
 func TestRequestTextForwardsListRequestToAllConnectedListservers(t *testing.T) {
 	server := &Server{logger: NewLogger("", false)}
 	first := &ServerList{
