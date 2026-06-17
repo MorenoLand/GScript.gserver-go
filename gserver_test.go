@@ -2370,7 +2370,6 @@ func TestControlOnlyPacketClassification(t *testing.T) {
 		PLI_RC_FILEBROWSER_START,
 		PLI_NPCSERVERQUERY,
 		PLI_RC_FOLDERDELETE,
-		PLI_RC_UNKNOWN162,
 	}
 	for _, packetId := range rcOnly {
 		if !isRCOnlyPacket(packetId) {
@@ -2395,6 +2394,7 @@ func TestControlOnlyPacketClassification(t *testing.T) {
 		PLI_PROFILEGET,
 		PLI_PROFILESET,
 		PLI_UPDATECLASS,
+		PLI_RC_UNKNOWN162,
 		PLI_REQUESTUPDATEBOARD,
 		PLI_LANGUAGE,
 	}
@@ -2435,6 +2435,34 @@ func TestHandleDecompressedPacketsSplitsNewlineDelimitedClientPackets(t *testing
 
 	if p.language != "French" {
 		t.Fatalf("language = %q, want French", p.language)
+	}
+}
+
+func TestHandleRawDataDecompressesGen2NCFrames(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.weapons = map[string]*Weapon{
+		"ControlWeapon": {name: "ControlWeapon", image: "control.png", script: "function onCreated() {}"},
+	}
+	p := NewPlayer(nil, server)
+	p.playerType = PLTYPE_NC
+	p.queueOutgoing = true
+	p.encryption.SetGen(ENCRYPT_GEN_2)
+
+	frame, err := ZlibCompress([]byte{byte(PLI_NC_WEAPONLISTGET + 32), '\n'})
+	if err != nil {
+		t.Fatalf("compress nc weapon list request: %v", err)
+	}
+	p.handleRawData(frame)
+
+	want := NewBuffer()
+	want.WriteByte(PLO_NC_WEAPONLISTGET + 32)
+	want.WriteString8("ControlWeapon")
+	want.WriteByte('\n')
+	if !bytes.Contains(p.outQueue, want.Bytes()) {
+		t.Fatalf("NC weapon list response = % X, want % X", p.outQueue, want.Bytes())
+	}
+	if p.invalidPackets != 0 {
+		t.Fatalf("invalidPackets = %d, want 0", p.invalidPackets)
 	}
 }
 

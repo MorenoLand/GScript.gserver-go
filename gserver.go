@@ -2606,8 +2606,15 @@ func (p *Player) handleRawData(data []byte) {
 			p.server.logger.Debug("handleRawData: Unknown compression type %d", compressType)
 			return
 		}
+	} else if p.encryption.gen == ENCRYPT_GEN_2 || p.encryption.gen == ENCRYPT_GEN_3 {
+		p.server.logger.PacketDebug("handleRawData: GEN_%d - decompressing zlib packet", p.encryption.gen+1)
+		decompressed, err = ZlibDecompress(data)
+		if err != nil {
+			p.server.logger.Debug("handleRawData: GEN_%d zlib decompress failed: %v", p.encryption.gen+1, err)
+			return
+		}
 	} else {
-		p.server.logger.PacketDebug("handleRawData: GEN_1-3 - using newline delimiter")
+		p.server.logger.PacketDebug("handleRawData: GEN_1 - using newline delimiter")
 		p.handleDecompressedPackets(data)
 		return
 	}

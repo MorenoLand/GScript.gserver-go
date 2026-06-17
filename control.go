@@ -23,7 +23,7 @@ func isRCOnlyPacket(packetId int) bool {
 	if packetId >= PLI_RC_SERVEROPTIONSGET && packetId <= PLI_RC_FILEBROWSER_RENAME {
 		return packetId != PLI_PROFILEGET && packetId != PLI_PROFILESET
 	}
-	return packetId == PLI_RC_FOLDERDELETE || packetId == PLI_RC_UNKNOWN162
+	return packetId == PLI_RC_FOLDERDELETE
 }
 
 func isNCOnlyPacket(packetId int) bool {
