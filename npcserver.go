@@ -185,12 +185,12 @@ func (n *NPCServer) SendNPCAdd(to *Player, npc *NPC) {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_NC_NPCADD)
 	buf.WriteGInt(npc.id)
-	buf.WriteByte(byte(NPCPROP_NAME))
-	buf.WriteGString(npc.npcName)
-	buf.WriteByte(byte(NPCPROP_TYPE))
-	buf.WriteGString(npc.scriptType)
-	buf.WriteByte(byte(NPCPROP_CURLEVEL))
-	buf.WriteGString(levelName)
+	buf.WriteGChar(NPCPROP_NAME)
+	buf.WriteGChar(byte(len(npc.npcName))).Write([]byte(npc.npcName))
+	buf.WriteGChar(NPCPROP_TYPE)
+	buf.WriteGChar(byte(len(npc.scriptType))).Write([]byte(npc.scriptType))
+	buf.WriteGChar(NPCPROP_CURLEVEL)
+	buf.WriteGChar(byte(len(levelName))).Write([]byte(levelName))
 	to.send(buf)
 }
 

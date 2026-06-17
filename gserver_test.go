@@ -292,9 +292,11 @@ func TestLoadNpcsLoadsControlNPCWithSavedID(t *testing.T) {
 func TestNCListNPCsSendsDatabaseNPCsToNCConnection(t *testing.T) {
 	server := newLoginTestServer(t)
 	nc := NewPlayer(nil, server)
+	nc.id = 9
 	nc.playerType = PLTYPE_NC
 	nc.queueOutgoing = true
 	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
 	npc := NewNPC(DBNPC)
 	npc.id = 10000
 	npc.npcName = "Control-NPC"
@@ -309,15 +311,122 @@ func TestNCListNPCsSendsDatabaseNPCsToNCConnection(t *testing.T) {
 	want := NewBuffer()
 	want.WriteByte(PLO_NC_NPCADD + 32)
 	want.WriteGInt(10000)
-	want.WriteByte(byte(NPCPROP_NAME))
-	want.WriteGString("Control-NPC")
-	want.WriteByte(byte(NPCPROP_TYPE))
-	want.WriteGString("CONTROL")
-	want.WriteByte(byte(NPCPROP_CURLEVEL))
-	want.WriteGString("onlinestartlocal.nw")
+	want.WriteGChar(NPCPROP_NAME)
+	want.WriteString8Encoded("Control-NPC")
+	want.WriteGChar(NPCPROP_TYPE)
+	want.WriteString8Encoded("CONTROL")
+	want.WriteGChar(NPCPROP_CURLEVEL)
+	want.WriteString8Encoded("onlinestartlocal.nw")
 	want.WriteByte('\n')
 	if !bytes.Contains(nc.outQueue, want.Bytes()) {
 		t.Fatalf("NC list payload = % X, want to contain % X", nc.outQueue, want.Bytes())
+	}
+}
+
+func TestNCNpcGetParsesPayloadAfterPacketID(t *testing.T) {
+	server := newLoginTestServer(t)
+	nc := NewPlayer(nil, server)
+	nc.playerType = PLTYPE_NC
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	npc := NewNPC(DBNPC)
+	npc.id = 10000
+	npc.npcName = "Control-NPC"
+	npc.saves[0] = 7
+	if !server.AddNPC(npc) {
+		t.Fatalf("AddNPC returned false")
+	}
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_NC_NPCGET)
+	packet.WriteGInt(10000)
+	if !nc.msgPLI_NC_NPCGET(packet.Bytes()) {
+		t.Fatalf("msgPLI_NC_NPCGET returned false")
+	}
+
+	want := append([]byte{PLO_NC_NPCATTRIBUTES + 32}, []byte(gtokenizeText("save0=7\n"))...)
+	if !bytes.Contains(nc.outQueue, want) {
+		t.Fatalf("NC npc attributes payload = % X, want % X", nc.outQueue, want)
+	}
+}
+
+func TestNCWeaponListUsesEncodedNames(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.weapons = map[string]*Weapon{
+		"ControlWeapon": {name: "ControlWeapon", image: "control.png", script: "function onCreated() {}"},
+	}
+	nc := NewPlayer(nil, server)
+	nc.playerType = PLTYPE_NC
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	nc.msgPLI_NC_WEAPONLISTGET([]byte{PLI_NC_WEAPONLISTGET})
+
+	want := NewBuffer()
+	want.WriteByte(PLO_NC_WEAPONLISTGET + 32)
+	want.WriteString8Encoded("ControlWeapon")
+	want.WriteByte('\n')
+	if !bytes.Contains(nc.outQueue, want.Bytes()) {
+		t.Fatalf("NC weapon list payload = % X, want % X", nc.outQueue, want.Bytes())
+	}
+}
+
+func TestNCWeaponGetParsesPayloadAfterPacketID(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.weapons = map[string]*Weapon{
+		"ControlWeapon": {name: "ControlWeapon", image: "control.png", script: "line1\nline2"},
+	}
+	nc := NewPlayer(nil, server)
+	nc.playerType = PLTYPE_NC
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	packet := append([]byte{PLI_NC_WEAPONGET}, []byte("ControlWeapon")...)
+	if !nc.msgPLI_NC_WEAPONGET(packet) {
+		t.Fatalf("msgPLI_NC_WEAPONGET returned false")
+	}
+
+	want := NewBuffer()
+	want.WriteByte(PLO_NC_WEAPONGET + 32)
+	want.WriteString8Encoded("ControlWeapon")
+	want.WriteString8Encoded("control.png")
+	want.Write([]byte("line1\xa7line2"))
+	want.WriteByte('\n')
+	if !bytes.Contains(nc.outQueue, want.Bytes()) {
+		t.Fatalf("NC weapon get payload = % X, want % X", nc.outQueue, want.Bytes())
+	}
+}
+
+func TestNCClassAddParsesPayloadAfterPacketID(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.classes = make(map[string]*ScriptClass)
+	nc := NewPlayer(nil, server)
+	nc.id = 9
+	nc.playerType = PLTYPE_NC
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_NC_CLASSADD)
+	packet.WriteGChar(byte(len("ControlClass")))
+	packet.Write([]byte("ControlClass"))
+	packet.Write([]byte(gtokenizeText("function onCreated() {\n  echo(\"hi\");\n}")))
+
+	if !nc.msgPLI_NC_CLASSADD(packet.Bytes()) {
+		t.Fatalf("msgPLI_NC_CLASSADD returned false")
+	}
+	classObj := server.classes["ControlClass"]
+	if classObj == nil {
+		t.Fatalf("ControlClass was not added")
+	}
+	if !strings.Contains(classObj.script, "echo(\"hi\")") || strings.Contains(classObj.script, "\x01") {
+		t.Fatalf("class script was not untokenized correctly: %q", classObj.script)
+	}
+	want := []byte{PLO_NC_CLASSADD + 32}
+	want = append(want, []byte("ControlClass")...)
+	if !bytes.Contains(nc.outQueue, want) {
+		t.Fatalf("NC class add broadcast = % X, want % X", nc.outQueue, want)
 	}
 }
 
@@ -530,7 +639,7 @@ func TestRCUpdateLevelsReloadsCachedLevel(t *testing.T) {
 	}
 }
 
-func TestRCPostLoginTailAnnouncesNewRCToOtherRCs(t *testing.T) {
+func TestRCPostLoginTailAnnouncesNewRCToAllRCs(t *testing.T) {
 	server := newLoginTestServer(t)
 	existing := NewPlayer(nil, server)
 	existing.id = 2
@@ -556,8 +665,8 @@ func TestRCPostLoginTailAnnouncesNewRCToOtherRCs(t *testing.T) {
 	if !bytes.Contains(existing.outQueue, want) {
 		t.Fatalf("existing RC did not receive new RC message: % X", existing.outQueue)
 	}
-	if bytes.Contains(rc.outQueue, want) {
-		t.Fatalf("new RC should not receive its own new RC message: % X", rc.outQueue)
+	if !bytes.Contains(rc.outQueue, want) {
+		t.Fatalf("new RC did not receive its own new RC message: % X", rc.outQueue)
 	}
 }
 
@@ -587,8 +696,11 @@ func TestNCPostLoginTailAnnouncesNewNCToOtherNCs(t *testing.T) {
 	if !bytes.Contains(existing.outQueue, want) {
 		t.Fatalf("existing NC did not receive new NC message: % X", existing.outQueue)
 	}
-	if bytes.Contains(nc.outQueue, want) {
-		t.Fatalf("new NC should not receive its own new NC message: % X", nc.outQueue)
+	if !bytes.Contains(nc.outQueue, append([]byte{PLO_RC_CHAT + 32}, []byte("Welcome to the NPC-Server for moondeath")...)) {
+		t.Fatalf("new NC did not receive welcome message: % X", nc.outQueue)
+	}
+	if !bytes.Contains(nc.outQueue, want) {
+		t.Fatalf("new NC did not receive its own new NC message: % X", nc.outQueue)
 	}
 }
 

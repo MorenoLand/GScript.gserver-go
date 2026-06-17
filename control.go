@@ -195,7 +195,7 @@ func (p *Player) msgPLI_RC_PLAYERPROPSSET(packet []byte) bool {
 	return true
 }
 func (p *Player) msgPLI_RC_DISCONNECTPLAYER(packet []byte) bool {
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	playerId := buf.ReadGShort()
 	targetPlayer := p.server.getPlayerById(uint16(playerId))
 	if targetPlayer == nil {
@@ -255,7 +255,7 @@ func (p *Player) msgPLI_RC_ADMINMESSAGE(packet []byte) bool {
 		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to send an admin message.")))
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	message := buf.ReadString()
 	buf2 := NewBuffer()
 	buf2.WriteByte(PLO_RC_ADMINMESSAGE)
@@ -274,7 +274,7 @@ func (p *Player) msgPLI_RC_PRIVADMINMESSAGE(packet []byte) bool {
 		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to send an admin message.")))
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	playerId := buf.ReadGShort()
 	targetPlayer := p.server.getPlayerById(uint16(playerId))
 	if targetPlayer == nil {
@@ -334,7 +334,7 @@ func (p *Player) msgPLI_RC_SERVERFLAGSSET(packet []byte) bool {
 		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to set the server flags.")))
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	count := buf.ReadGShort()
 	p.server.flagMu.Lock()
 	oldFlags := make(map[string]string)
@@ -399,7 +399,7 @@ func (p *Player) msgPLI_RC_ACCOUNTADD(packet []byte) bool {
 		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to create new accounts.")))
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	accountName := buf.ReadGString()
 	_ = buf.ReadGString()
 	email := buf.ReadGString()
@@ -426,7 +426,7 @@ func (p *Player) msgPLI_RC_ACCOUNTDEL(packet []byte) bool {
 		p.send(NewBufferFromBytes(rcChatPacket("Server: You are not authorized to delete accounts.")))
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	accountName := buf.ReadGString()
 	if idx := strings.Index(accountName, "/"); idx != -1 {
 		accountName = accountName[idx+1:]
@@ -455,7 +455,7 @@ func (p *Player) msgPLI_RC_ACCOUNTLISTGET(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted ACCOUNTLISTGET (non-RC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	name := buf.ReadGString()
 	_ = buf.ReadGString()
 	name = strings.ReplaceAll(name, "%", "*")
@@ -1515,7 +1515,7 @@ func (p *Player) msgPLI_NC_NPCGET(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted NPCGET (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	if buf.Remaining() == 0 {
 		return true
 	}
@@ -1530,10 +1530,10 @@ func (p *Player) msgPLI_NC_NPCGET(packet []byte) bool {
 			}
 		}
 		npc.mu.Unlock()
-		flagsStr = strings.ReplaceAll(flagsStr, "\n", "\x01")
+		flagsStr = gtokenizeText(flagsStr)
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_NPCATTRIBUTES)
-		buf2.WriteString8(flagsStr)
+		buf2.Write([]byte(flagsStr))
 		p.send(buf2)
 	}
 	return true
@@ -1543,7 +1543,7 @@ func (p *Player) msgPLI_NC_NPCDELETE(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted NPCDELETE (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	npcId := buf.ReadGInt()
 	npc := p.server.GetNPC(npcId)
 	if npc != nil && npc.npcType == DBNPC {
@@ -1562,7 +1562,7 @@ func (p *Player) msgPLI_NC_NPCRESET(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted NPCRESET (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	npcId := buf.ReadGInt()
 	npc := p.server.GetNPC(npcId)
 	if npc != nil && npc.npcType == DBNPC {
@@ -1576,16 +1576,15 @@ func (p *Player) msgPLI_NC_NPCSCRIPTGET(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted NPCSCRIPTGET (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	npcId := buf.ReadGInt()
 	npc := p.server.GetNPC(npcId)
 	if npc != nil {
 		code := npc.script
-		code = strings.ReplaceAll(code, "\n", "\x01")
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_NPCSCRIPT)
 		buf2.WriteGInt(uint32(npcId))
-		buf2.WriteString8(code)
+		buf2.Write([]byte(gtokenizeText(code)))
 		p.send(buf2)
 	}
 	return true
@@ -1595,11 +1594,11 @@ func (p *Player) msgPLI_NC_NPCWARP(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted NPCWARP (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	npcId := buf.ReadGInt()
-	npcX := float32(buf.ReadGByte()) / 2.0
-	npcY := float32(buf.ReadGByte()) / 2.0
-	npcLevelName := buf.ReadGString()
+	npcX := float32(buf.ReadGChar()) / 2.0
+	npcY := float32(buf.ReadGChar()) / 2.0
+	npcLevelName := buf.ReadString()
 	npc := p.server.GetNPC(npcId)
 	if npc != nil {
 		level := p.server.GetLevel(npcLevelName)
@@ -1616,14 +1615,13 @@ func (p *Player) msgPLI_NC_NPCFLAGSGET(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted NPCFLAGSGET (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	npcId := buf.ReadGInt()
 	npc := p.server.GetNPC(npcId)
 	if npc != nil {
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_NPCFLAGS)
 		buf2.WriteGInt(uint32(npcId))
-		buf2.WriteString8("")
 		p.send(buf2)
 	}
 	return true
@@ -1633,10 +1631,9 @@ func (p *Player) msgPLI_NC_NPCSCRIPTSET(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted NPCSCRIPTSET (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(packet[1:])
 	npcId := buf.ReadGInt()
-	npcScript := buf.ReadGString()
-	npcScript = strings.ReplaceAll(npcScript, "\x01", "\n")
+	npcScript := guntokenizeText(buf.ReadString())
 	npc := p.server.GetNPC(npcId)
 	if npc != nil {
 		npc.script = npcScript
@@ -1656,9 +1653,8 @@ func (p *Player) msgPLI_NC_NPCADD(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted NPCADD (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
-	npcData := buf.ReadGString()
-	npcData = strings.ReplaceAll(npcData, "\x01", "\n")
+	buf := NewBufferFromBytes(packet[1:])
+	npcData := guntokenizeText(buf.ReadString())
 	parts := strings.Split(npcData, "\n")
 	if len(parts) < 7 {
 		return true
@@ -1690,6 +1686,12 @@ func (p *Player) msgPLI_NC_NPCADD(packet []byte) bool {
 	buf2 := NewBuffer()
 	buf2.WriteByte(PLO_NC_NPCADD)
 	buf2.WriteGInt(newNpc.id)
+	buf2.WriteGChar(NPCPROP_NAME)
+	buf2.WriteGChar(byte(len(newNpc.npcName))).Write([]byte(newNpc.npcName))
+	buf2.WriteGChar(NPCPROP_TYPE)
+	buf2.WriteGChar(byte(len(newNpc.scriptType))).Write([]byte(newNpc.scriptType))
+	buf2.WriteGChar(NPCPROP_CURLEVEL)
+	buf2.WriteGChar(byte(len(npcLevelName))).Write([]byte(npcLevelName))
 	p.server.sendPacketToType(PLTYPE_ANYNC, buf2.Bytes())
 	p.server.logger.Info("NPC %s added by %s", npcName, p.accountName)
 	return true
@@ -1699,18 +1701,17 @@ func (p *Player) msgPLI_NC_CLASSEDIT(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted CLASSEDIT (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
-	className := buf.ReadGString()
+	buf := NewBufferFromBytes(packet[1:])
+	className := buf.ReadString()
 	p.server.weaponMu.RLock()
 	classObj, exists := p.server.classes[className]
 	p.server.weaponMu.RUnlock()
 	if exists {
-		classCode := classObj.script
-		classCode = strings.ReplaceAll(classCode, "\n", "\x01")
+		classCode := gtokenizeText(classObj.script)
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_CLASSGET)
-		buf2.WriteString8(className)
-		buf2.WriteString8(classCode)
+		buf2.WriteGChar(byte(len(className))).Write([]byte(className))
+		buf2.Write([]byte(classCode))
 		p.send(buf2)
 	}
 	return true
@@ -1720,11 +1721,10 @@ func (p *Player) msgPLI_NC_CLASSADD(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted CLASSADD (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
-	classNameLen := buf.ReadGByte()
+	buf := NewBufferFromBytes(packet[1:])
+	classNameLen := buf.ReadGChar()
 	className := string(buf.ReadBytes(int(classNameLen)))
-	classCode := buf.ReadGString()
-	classCode = strings.ReplaceAll(classCode, "\x01", "\n")
+	classCode := guntokenizeText(buf.ReadString())
 	p.server.weaponMu.Lock()
 	_, hasClass := p.server.classes[className]
 	p.server.classes[className] = &ScriptClass{name: className, script: classCode}
@@ -1732,7 +1732,7 @@ func (p *Player) msgPLI_NC_CLASSADD(packet []byte) bool {
 	if !hasClass {
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_CLASSADD)
-		buf2.WriteString8(className)
+		buf2.Write([]byte(className))
 		p.server.sendPacketToType(PLTYPE_ANYNC, buf2.Bytes())
 	}
 	p.server.logger.Info("Script %s %s by %s", className, map[bool]string{true: "added", false: "updated"}[!hasClass], p.accountName)
@@ -1743,8 +1743,8 @@ func (p *Player) msgPLI_NC_LOCALNPCSGET(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted LOCALNPCSGET (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
-	levelName := buf.ReadGString()
+	buf := NewBufferFromBytes(packet[1:])
+	levelName := buf.ReadString()
 	if levelName == "" {
 		return true
 	}
@@ -1757,10 +1757,10 @@ func (p *Player) msgPLI_NC_LOCALNPCSGET(packet []byte) bool {
 				npcDump += fmt.Sprintf("\nNPC %d: %s\n", npc.id, npc.npcName)
 			}
 		}
-		npcDump = strings.ReplaceAll(npcDump, "\n", "\x01")
+		npcDump = gtokenizeText(npcDump)
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_LEVELDUMP)
-		buf2.WriteString8(npcDump)
+		buf2.Write([]byte(npcDump))
 		p.send(buf2)
 	}
 	return true
@@ -1775,7 +1775,7 @@ func (p *Player) msgPLI_NC_WEAPONLISTGET(packet []byte) bool {
 	p.server.weaponMu.RLock()
 	for weaponName := range p.server.weapons {
 		if weaponName != "" {
-			buf.WriteString8(weaponName)
+			buf.WriteGChar(byte(len(weaponName))).Write([]byte(weaponName))
 		}
 	}
 	p.server.weaponMu.RUnlock()
@@ -1787,17 +1787,16 @@ func (p *Player) msgPLI_NC_WEAPONGET(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted WEAPONGET (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
-	weaponName := buf.ReadGString()
+	buf := NewBufferFromBytes(packet[1:])
+	weaponName := buf.ReadString()
 	weapon := p.server.GetWeapon(weaponName)
 	if weapon != nil {
-		script := weapon.script
-		script = strings.ReplaceAll(script, "\n", "\xa7")
+		script := strings.ReplaceAll(weapon.script, "\n", "\xa7")
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_WEAPONGET)
-		buf2.WriteString8(weaponName)
-		buf2.WriteString8(weapon.image)
-		buf2.WriteString8(script)
+		buf2.WriteGChar(byte(len(weaponName))).Write([]byte(weaponName))
+		buf2.WriteGChar(byte(len(weapon.image))).Write([]byte(weapon.image))
+		buf2.Write([]byte(script))
 		p.send(buf2)
 	}
 	return true
@@ -1807,12 +1806,12 @@ func (p *Player) msgPLI_NC_WEAPONADD(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted WEAPONADD (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
-	weaponNameLen := buf.ReadGByte()
+	buf := NewBufferFromBytes(packet[1:])
+	weaponNameLen := buf.ReadGChar()
 	weaponName := string(buf.ReadBytes(int(weaponNameLen)))
-	weaponImageLen := buf.ReadGByte()
+	weaponImageLen := buf.ReadGChar()
 	weaponImage := string(buf.ReadBytes(int(weaponImageLen)))
-	weaponCode := buf.ReadGString()
+	weaponCode := buf.ReadString()
 	weaponCode = strings.ReplaceAll(weaponCode, "\xa7", "\n")
 	actionTaken := ""
 	weapon := p.server.GetWeapon(weaponName)
@@ -1837,8 +1836,8 @@ func (p *Player) msgPLI_NC_WEAPONDELETE(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted WEAPONDELETE (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
-	weaponName := buf.ReadGString()
+	buf := NewBufferFromBytes(packet[1:])
+	weaponName := buf.ReadString()
 	p.server.weaponMu.RLock()
 	_, exists := p.server.weapons[weaponName]
 	p.server.weaponMu.RUnlock()
@@ -1855,8 +1854,8 @@ func (p *Player) msgPLI_NC_CLASSDELETE(packet []byte) bool {
 		p.server.logger.Warning("[Hack] %s attempted CLASSDELETE (non-NC)", p.accountName)
 		return true
 	}
-	buf := NewBufferFromBytes(packet)
-	className := buf.ReadGString()
+	buf := NewBufferFromBytes(packet[1:])
+	className := buf.ReadString()
 	p.server.weaponMu.Lock()
 	_, exists := p.server.classes[className]
 	delete(p.server.classes, className)
@@ -1864,7 +1863,7 @@ func (p *Player) msgPLI_NC_CLASSDELETE(packet []byte) bool {
 	if exists {
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_NC_CLASSDELETE)
-		buf2.WriteString8(className)
+		buf2.Write([]byte(className))
 		p.server.sendPacketToType(PLTYPE_ANYNC, buf2.Bytes())
 		p.server.logger.Info("%s has deleted class %s", p.accountName, className)
 	} else {
@@ -1881,14 +1880,14 @@ func (p *Player) msgPLI_NC_LEVELLISTGET(packet []byte) bool {
 	buf.WriteByte(PLO_NC_LEVELLIST)
 	p.server.levelMu.RLock()
 	for levelName := range p.server.levels {
-		buf.WriteString8(levelName)
+		buf.Write([]byte(levelName))
 		buf.WriteByte('\n')
 	}
 	p.server.levelMu.RUnlock()
 	levelList := strings.ReplaceAll(string(buf.Bytes()[1:]), "\n", "\x01")
 	buf2 := NewBuffer()
 	buf2.WriteByte(PLO_NC_LEVELLIST)
-	buf2.WriteString8(levelList)
+	buf2.Write([]byte(levelList))
 	p.send(buf2)
 	return true
 }

@@ -1726,12 +1726,13 @@ func (p *Player) sendRCPostLoginTail() {
 		p.sendPLO_ADDPLAYER(other)
 	}
 	p.server.playerMu.RUnlock()
-	p.server.sendPacketToTypeExcept(PLTYPE_ANYRC, rcChatPacket("New RC: "+p.accountName), p.id)
+	p.server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket("New RC: "+p.accountName))
 }
 
 func (p *Player) sendNCPostLoginTail() {
 	p.sendNCNPCList()
 	p.sendNCClassList()
+	p.sendPLO_RC_CHAT("Welcome to the NPC-Server for " + p.accountName)
 
 	p.server.playerMu.RLock()
 	for _, other := range p.server.players {
@@ -1740,7 +1741,7 @@ func (p *Player) sendNCPostLoginTail() {
 		}
 	}
 	p.server.playerMu.RUnlock()
-	p.server.sendPacketToTypeExcept(PLTYPE_ANYNC, rcChatPacket("New NC: "+p.accountName), p.id)
+	p.server.sendPacketToType(PLTYPE_ANYNC, rcChatPacket("New NC: "+p.accountName))
 }
 
 func (p *Player) sendNCNPCList() {

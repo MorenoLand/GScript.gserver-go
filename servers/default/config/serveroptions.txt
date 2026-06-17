@@ -157,7 +157,7 @@ url = https://github.com/MorenoLand/GScript.GServerGo
 # The information of the computer hosting the gserver.  This gets sent to people wanting to connect.
 # If myip is set to AUTO, it uses the IP address exposed to the list server.
 serverip = orion.moreno.land
-serverport = 14802
+serverport = 14899
 serverinterface = AUTO
 
 # The local IP address of the computer.  Helps you connect to your server if your router can't route on
