@@ -364,16 +364,28 @@ func (p *Player) msgPLI_NC_WEAPONLISTGET(packet []byte) bool {
 	}
 	buf := NewBuffer()
 	buf.WriteByte(PLO_NC_WEAPONLISTGET)
+	names := make([]string, 0, len(p.server.weapons))
+	seen := make(map[string]bool, len(p.server.weapons))
 	p.server.weaponMu.RLock()
 	for weaponName, weapon := range p.server.weapons {
 		if weapon != nil {
 			weaponName = weapon.name
 		}
 		if weaponName != "" && (weapon == nil || !weapon.defPlayer) {
-			buf.WriteByte(byte(len(weaponName))).Write([]byte(weaponName))
+			key := strings.ToLower(weaponName)
+			if !seen[key] {
+				seen[key] = true
+				names = append(names, weaponName)
+			}
 		}
 	}
 	p.server.weaponMu.RUnlock()
+	sort.Slice(names, func(i, j int) bool {
+		return strings.ToLower(names[i]) < strings.ToLower(names[j])
+	})
+	for _, weaponName := range names {
+		buf.WriteByte(byte(len(weaponName))).Write([]byte(weaponName))
+	}
 	p.send(buf)
 	return true
 }

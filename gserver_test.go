@@ -450,7 +450,10 @@ func TestNCNpcFlagsGetSetRoundTrip(t *testing.T) {
 func TestNCWeaponListUsesRawNameLengths(t *testing.T) {
 	server := newLoginTestServer(t)
 	server.weapons = map[string]*Weapon{
+		"zweapon":       {name: "ZWeapon", image: "z.png", script: "function onCreated() {}"},
 		"ControlWeapon": {name: "ControlWeapon", image: "control.png", script: "function onCreated() {}"},
+		"controlweapon": {name: "ControlWeapon", image: "control.png", script: "function onCreated() {}"},
+		"Bomb":          {name: "Bomb", defPlayer: true},
 	}
 	nc := NewPlayer(nil, server)
 	nc.playerType = PLTYPE_NC
@@ -462,8 +465,9 @@ func TestNCWeaponListUsesRawNameLengths(t *testing.T) {
 	want := NewBuffer()
 	want.WriteByte(PLO_NC_WEAPONLISTGET + 32)
 	want.WriteString8("ControlWeapon")
+	want.WriteString8("ZWeapon")
 	want.WriteByte('\n')
-	if !bytes.Contains(nc.outQueue, want.Bytes()) {
+	if !bytes.Equal(nc.outQueue, want.Bytes()) {
 		t.Fatalf("NC weapon list payload = % X, want % X", nc.outQueue, want.Bytes())
 	}
 }
