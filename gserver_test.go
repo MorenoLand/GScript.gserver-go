@@ -518,6 +518,39 @@ func TestNCWeaponAddNotifiesRCChat(t *testing.T) {
 	}
 }
 
+func TestSendPacketToTypeDoesNotHoldPlayerLockWhileSending(t *testing.T) {
+	server := newLoginTestServer(t)
+	rc := NewPlayer(nil, server)
+	rc.id = 2
+	rc.playerType = PLTYPE_RC2
+	rc.loaded = true
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[rc.id] = rc
+
+	server.playerMu.Lock()
+	done := make(chan struct{})
+	go func() {
+		server.sendPacketToType(PLTYPE_ANYRC, rcChatPacket("hello"))
+		close(done)
+	}()
+	select {
+	case <-done:
+		t.Fatal("sendPacketToType returned while player lock was held")
+	case <-time.After(20 * time.Millisecond):
+	}
+	server.playerMu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("sendPacketToType did not finish after player lock was released")
+	}
+	if !bytes.Contains(rc.outQueue, append([]byte{PLO_RC_CHAT + 32}, []byte("hello")...)) {
+		t.Fatalf("RC did not receive fanout packet: % X", rc.outQueue)
+	}
+}
+
 func TestNCClassEditUsesRawNameLength(t *testing.T) {
 	server := newLoginTestServer(t)
 	server.classes = map[string]*ScriptClass{

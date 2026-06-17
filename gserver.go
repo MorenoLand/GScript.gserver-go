@@ -1109,31 +1109,43 @@ func (s *Server) handleTriggerCommand(player *Player, command string, args []str
 }
 func (s *Server) sendPacketToType(playerType int, data []byte) {
 	s.playerMu.RLock()
-	defer s.playerMu.RUnlock()
+	targets := make([]*Player, 0, len(s.players))
 	for _, p := range s.players {
 		if p != nil && p.playerType&playerType != 0 {
-			p.sendPacket(data)
+			targets = append(targets, p)
 		}
+	}
+	s.playerMu.RUnlock()
+	for _, p := range targets {
+		p.sendPacket(data)
 	}
 }
 
 func (s *Server) sendPacketToTypeExcept(playerType int, data []byte, excludeId uint16) {
 	s.playerMu.RLock()
-	defer s.playerMu.RUnlock()
+	targets := make([]*Player, 0, len(s.players))
 	for _, p := range s.players {
 		if p != nil && p.id != excludeId && p.playerType&playerType != 0 {
-			p.sendPacket(data)
+			targets = append(targets, p)
 		}
+	}
+	s.playerMu.RUnlock()
+	for _, p := range targets {
+		p.sendPacket(data)
 	}
 }
 
 func (s *Server) sendRCChat(message string) {
 	s.playerMu.RLock()
-	defer s.playerMu.RUnlock()
+	targets := make([]*Player, 0, len(s.players))
 	for _, p := range s.players {
 		if p != nil && p.playerType&PLTYPE_ANYRC != 0 {
-			p.send(NewBufferFromBytes(rcChatPacket(message)))
+			targets = append(targets, p)
 		}
+	}
+	s.playerMu.RUnlock()
+	for _, p := range targets {
+		p.send(NewBufferFromBytes(rcChatPacket(message)))
 	}
 }
 
@@ -2828,10 +2840,12 @@ func (p *Player) writeEncodedPacket(packetName string, packetId byte, packet []b
 	if disconnected || conn == nil {
 		return
 	}
+	_ = conn.SetWriteDeadline(time.Now().Add(2 * time.Second))
 	if _, err := conn.Write(data); err != nil {
 		p.server.logger.Debug("sendPacket: write error to player %d (%s): %v", p.id, p.accountName, err)
 		go p.disconnect()
 	}
+	_ = conn.SetWriteDeadline(time.Time{})
 }
 
 func encodeOutgoingPacket(packet []byte) []byte {
