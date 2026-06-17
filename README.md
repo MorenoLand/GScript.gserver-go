@@ -469,4 +469,3 @@ GPL v3.0 - See LICENSE file for details.
 
 ---
 
-**Programmed by denveous.**
