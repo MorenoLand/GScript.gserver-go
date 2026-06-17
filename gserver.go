@@ -954,6 +954,16 @@ func (s *Server) GetPlayerCount() int {
 func (s *Server) getPlayerById(id uint16) *Player {
 	return s.GetPlayer(id)
 }
+func (s *Server) getPlayerByIdAndType(id uint16, playerType int) *Player {
+	player := s.GetPlayer(id)
+	if player == nil {
+		return nil
+	}
+	if playerType == 0 || player.playerType == playerType || player.playerType&playerType != 0 {
+		return player
+	}
+	return nil
+}
 func (s *Server) getPlayerByAccount(accountName string, playerType int) *Player {
 	s.playerMu.RLock()
 	defer s.playerMu.RUnlock()
@@ -964,6 +974,21 @@ func (s *Server) getPlayerByAccount(accountName string, playerType int) *Player 
 	}
 	return nil
 }
+
+func (s *Server) nextGuestPCAccountName() string {
+	if s == nil {
+		return "pc:000000"
+	}
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	for attempts := 0; attempts < 1000; attempts++ {
+		accountName := fmt.Sprintf("pc:%06d", r.Intn(1000000))
+		if s.getPlayerByAccount(accountName, PLTYPE_ANYPLAYER) == nil && !s.accountExists(accountName) {
+			return accountName
+		}
+	}
+	return fmt.Sprintf("pc:%06d", time.Now().UnixNano()%1000000)
+}
+
 func (s *Server) accountExists(accountName string) bool {
 	if s != nil && s.config != nil {
 		return s.config.FileExists("accounts/" + accountName + ".txt")
@@ -1699,7 +1724,7 @@ func (a *Account) LoadAccount(accountName string, ignoreNick bool) bool {
 		a.isLoadOnly = true
 		a.isGuest = true
 		a.communityName = "guest"
-		a.accountName = accountName
+		a.accountName = a.server.nextGuestPCAccountName()
 	} else {
 		a.communityName = accountName
 	}
@@ -2675,6 +2700,7 @@ func (p *Player) handleLogin(packet []byte) bool {
 	p.weaponList = []string{}
 	p.chestList = []string{}
 	p.folderList = []string{}
+	p.server.sendLoginPacketToListservers(p, password, identity)
 	// Set encryption based on client type
 	p.server.logger.Debug("Setting encryption: clientType=%d PLTYPE_CLIENT=%d PLTYPE_CLIENT2=%d PLTYPE_CLIENT3=%d", clientType, PLTYPE_CLIENT, PLTYPE_CLIENT2, PLTYPE_CLIENT3)
 	switch clientType {
@@ -7271,8 +7297,10 @@ func (sl *ServerList) processListPackets(data []byte) {
 func (sl *ServerList) handleListPacket(packetId uint8, data []byte) {
 	sl.server.logger.Debug("[LISTSERVER] Received packet %d: %d bytes", packetId, len(data))
 	switch packetId {
-	case SVI_VERIACC, SVI_VERIACC2:
-		sl.server.logger.Debug("List server verification response")
+	case SVI_VERIACC:
+		sl.server.logger.Debug("Deprecated account verification response")
+	case SVI_VERIACC2:
+		sl.handleVerifyAccount2(data)
 	case SVI_FILESTART, SVI_FILESTART2, SVI_FILESTART3:
 		sl.server.logger.Debug("File transfer started")
 	case SVI_FILEDATA, SVI_FILEDATA2, SVI_FILEDATA3:
@@ -7289,6 +7317,8 @@ func (sl *ServerList) handleListPacket(packetId uint8, data []byte) {
 		buf := NewBuffer()
 		buf.WriteGChar(SVO_PING)
 		sl.SendPacket(buf.Bytes())
+	case SVI_ASSIGNPCID:
+		sl.handleAssignPCID(data)
 	}
 }
 
@@ -7298,8 +7328,10 @@ func (sl *ServerList) processPacket(data []byte) {
 	}
 	packetId := data[0]
 	switch packetId {
-	case SVI_VERIACC, SVI_VERIACC2:
-		sl.server.logger.Debug("List server verification response")
+	case SVI_VERIACC:
+		sl.server.logger.Debug("Deprecated account verification response")
+	case SVI_VERIACC2:
+		sl.handleVerifyAccount2(data[1:])
 	case SVI_FILESTART, SVI_FILESTART2, SVI_FILESTART3:
 		sl.server.logger.Debug("File transfer started")
 	case SVI_FILEDATA, SVI_FILEDATA2, SVI_FILEDATA3:
@@ -7312,6 +7344,8 @@ func (sl *ServerList) processPacket(data []byte) {
 		buf := NewBuffer()
 		buf.WriteGChar(SVO_PING)
 		sl.SendPacket(buf.Bytes())
+	case SVI_ASSIGNPCID:
+		sl.handleAssignPCID(data[1:])
 	}
 }
 func (sl *ServerList) SendPacket(packet []byte) {
@@ -7336,6 +7370,67 @@ func (sl *ServerList) SendPlayerTextPacket(packetId byte, playerID uint16, text 
 	buf := NewBuffer()
 	buf.WriteGChar(packetId).WriteGShort(playerID).Write([]byte(text))
 	sl.sendPacket(buf.Bytes())
+}
+
+func (sl *ServerList) SendLoginPacketForPlayer(player *Player, password, identity string) {
+	if !sl.connected || player == nil {
+		return
+	}
+	buf := NewBuffer()
+	buf.WriteGChar(SVO_VERIACC2)
+	buf.WriteString8Encoded(player.accountName)
+	buf.WriteString8Encoded(password)
+	buf.WriteGShort(player.id)
+	buf.WriteGChar(byte(player.playerType))
+	buf.WriteGShort(uint16(len(identity)))
+	buf.Write([]byte(identity))
+	sl.sendPacket(buf.Bytes())
+}
+
+func (sl *ServerList) handleVerifyAccount2(data []byte) {
+	if len(data) < 4 || sl.server == nil {
+		return
+	}
+	buf := NewBufferFromBytes(data)
+	accountName := buf.ReadGCharString()
+	playerID := buf.ReadGShort()
+	playerType := int(buf.ReadGChar())
+	message := string(buf.ReadBytes(buf.BytesLeft()))
+	player := sl.server.getPlayerByIdAndType(playerID, playerType)
+	if player == nil {
+		return
+	}
+	if accountName != "" {
+		player.setAccountName(accountName)
+	}
+	if message != "" && message != "SUCCESS" {
+		player.isLoadOnly = true
+		player.sendPLO_DISCMESSAGE(message)
+		player.disconnect()
+	}
+}
+
+func (sl *ServerList) handleAssignPCID(data []byte) {
+	if len(data) < 4 || sl.server == nil {
+		return
+	}
+	buf := NewBufferFromBytes(data)
+	playerID := buf.ReadGShort()
+	playerType := int(buf.ReadGChar())
+	pcID := buf.ReadGCharString()
+	player := sl.server.getPlayerByIdAndType(playerID, playerType)
+	if player == nil || pcID == "" {
+		return
+	}
+	if parsed, err := strconv.ParseInt(pcID, 10, 64); err == nil {
+		player.deviceId = parsed
+	}
+	if player.isGuest || strings.EqualFold(player.accountName, "guest") || strings.HasPrefix(strings.ToLower(player.accountName), "pc:") {
+		player.isGuest = true
+		player.isLoadOnly = true
+		player.accountName = "pc:" + pcID
+		player.communityName = "guest"
+	}
 }
 
 func (sl *ServerList) handleRequestText(data []byte) {

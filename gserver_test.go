@@ -3193,6 +3193,108 @@ func TestServerListSendsAllowedVersionsText(t *testing.T) {
 	}
 }
 
+func TestGuestLoginSendsVerifyAccount2WithIdentity(t *testing.T) {
+	server := newLoginTestServer(t)
+	writeTestFile(t, server.config.GetBasePath(), "accounts/defaultaccount.txt", ""+
+		"GRACC001\n"+
+		"NICK guest\n"+
+		"LEVEL onlinestartlocal.nw\n"+
+		"X 4\n"+
+		"Y 4\n")
+	sl := &ServerList{
+		server:    server,
+		connected: true,
+		enabled:   true,
+		codec:     ENCRYPT_GEN_1,
+		sendQueue: make(chan []byte, 1),
+	}
+	server.serverList = sl
+	p := NewPlayer(nil, server)
+
+	packet := buildLoginPacket(t, 5, 0, "G3D03014", "guest", "", "device-token")
+	if !p.handleLogin(packet) {
+		t.Fatal("handleLogin returned false")
+	}
+
+	var got []byte
+	select {
+	case got = <-sl.sendQueue:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SVO_VERIACC2")
+	}
+	got = bytes.TrimSuffix(got, []byte{'\n'})
+	buf := NewBufferFromBytes(got)
+	if packetID := buf.ReadGChar(); packetID != SVO_VERIACC2 {
+		t.Fatalf("listserver packet id = %d, want SVO_VERIACC2", packetID)
+	}
+	if account := buf.ReadGCharString(); account != "guest" {
+		t.Fatalf("account = %q, want guest", account)
+	}
+	if password := buf.ReadGCharString(); password != "" {
+		t.Fatalf("password = %q, want empty", password)
+	}
+	if id := buf.ReadGShort(); id != p.id {
+		t.Fatalf("player id = %d, want %d", id, p.id)
+	}
+	if playerType := buf.ReadGChar(); playerType != PLTYPE_CLIENT3 {
+		t.Fatalf("player type = %d, want %d", playerType, PLTYPE_CLIENT3)
+	}
+	identityLen := int(buf.ReadGShort())
+	if identity := string(buf.ReadBytes(identityLen)); identity != "device-token" {
+		t.Fatalf("identity = %q, want device-token", identity)
+	}
+}
+
+func TestGuestLoadUsesPCAccountName(t *testing.T) {
+	server := newLoginTestServer(t)
+	writeTestFile(t, server.config.GetBasePath(), "accounts/defaultaccount.txt", ""+
+		"GRACC001\n"+
+		"NICK guest\n"+
+		"LEVEL onlinestartlocal.nw\n"+
+		"X 4\n"+
+		"Y 4\n")
+	p := NewPlayer(nil, server)
+	p.setServer(server)
+	if !p.LoadAccount("guest", true) {
+		t.Fatal("LoadAccount guest returned false")
+	}
+	if !p.isGuest || !p.isLoadOnly {
+		t.Fatalf("guest flags = isGuest:%v isLoadOnly:%v, want true/true", p.isGuest, p.isLoadOnly)
+	}
+	if !strings.HasPrefix(p.accountName, "pc:") {
+		t.Fatalf("guest accountName = %q, want pc:*", p.accountName)
+	}
+	if p.communityName != "guest" {
+		t.Fatalf("communityName = %q, want guest", p.communityName)
+	}
+}
+
+func TestServerListAssignPCIDUpdatesGuest(t *testing.T) {
+	server := &Server{
+		logger:  NewLogger("", false),
+		players: make(map[uint16]*Player),
+	}
+	p := &Player{id: 44, server: server, playerType: PLTYPE_CLIENT3}
+	p.accountName = "guest"
+	p.isGuest = true
+	server.players[p.id] = p
+	sl := &ServerList{server: server}
+
+	data := NewBuffer().
+		WriteGShort(p.id).
+		WriteGChar(byte(p.playerType)).
+		WriteString8Encoded("6259711").
+		Bytes()
+	sl.handleListPacket(SVI_ASSIGNPCID, data)
+
+	if p.deviceId != 6259711 {
+		t.Fatalf("deviceId = %d, want 6259711", p.deviceId)
+	}
+	if p.accountName != "pc:6259711" || p.communityName != "guest" || !p.isLoadOnly {
+		t.Fatalf("guest after PCID = account:%q community:%q loadOnly:%v", p.accountName, p.communityName, p.isLoadOnly)
+	}
+}
+
 func TestServerListSendsRCPlayersForPlayerList(t *testing.T) {
 	server := &Server{logger: NewLogger("", false)}
 	sl := &ServerList{

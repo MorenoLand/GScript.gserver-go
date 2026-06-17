@@ -66,6 +66,30 @@ func (s *Server) sendPlayerTextToListservers(packetId byte, playerID uint16, tex
 	return sent
 }
 
+func (s *Server) sendLoginPacketToListservers(player *Player, password, identity string) bool {
+	if s == nil || player == nil {
+		return false
+	}
+	sent := false
+	seen := make(map[*ServerList]bool)
+	for _, serverList := range s.serverLists {
+		if serverList == nil || seen[serverList] {
+			continue
+		}
+		seen[serverList] = true
+		if !serverList.connected {
+			continue
+		}
+		serverList.SendLoginPacketForPlayer(player, password, identity)
+		sent = true
+	}
+	if s.serverList != nil && !seen[s.serverList] && s.serverList.connected {
+		s.serverList.SendLoginPacketForPlayer(player, password, identity)
+		sent = true
+	}
+	return sent
+}
+
 func splitCommaList(value string) []string {
 	parts := strings.Split(value, ",")
 	out := make([]string, 0, len(parts))
