@@ -577,9 +577,10 @@ func TestNCWeaponAddReportsGS2CompilerErrors(t *testing.T) {
 	if server.GetWeapon("badweapon") != nil {
 		t.Fatalf("bad weapon was added after compiler error")
 	}
-	want := append([]byte{PLO_RC_CHAT + 32}, []byte("Script compiler output for Weapon badweapon:\xa7error: parser error occurred near line 1: bad syntax")...)
-	if !bytes.Contains(nc.outQueue, want) {
-		t.Fatalf("NC compiler error response = % X, want contains % X", nc.outQueue, want)
+	wantHeader := append([]byte{PLO_RC_CHAT + 32}, []byte("Script compiler output for Weapon badweapon:")...)
+	wantError := append([]byte{PLO_RC_CHAT + 32}, []byte("error: parser error occurred near line 1: bad syntax")...)
+	if !bytes.Contains(nc.outQueue, wantHeader) || !bytes.Contains(nc.outQueue, wantError) {
+		t.Fatalf("NC compiler error response = % X, want header % X and error % X", nc.outQueue, wantHeader, wantError)
 	}
 }
 
@@ -611,9 +612,10 @@ func TestNCWeaponAddReportsCompilerOutputWhenOutputFileMissing(t *testing.T) {
 	if server.GetWeapon("badweapon") != nil {
 		t.Fatalf("bad weapon was added after compiler output failure")
 	}
-	want := append([]byte{PLO_RC_CHAT + 32}, []byte("Script compiler output for Weapon badweapon:\xa7error: malformed input at line 1: silent output failure")...)
-	if !bytes.Contains(nc.outQueue, want) {
-		t.Fatalf("NC compiler missing-output response = % X, want contains % X", nc.outQueue, want)
+	wantHeader := append([]byte{PLO_RC_CHAT + 32}, []byte("Script compiler output for Weapon badweapon:")...)
+	wantError := append([]byte{PLO_RC_CHAT + 32}, []byte("error: malformed input at line 1: silent output failure")...)
+	if !bytes.Contains(nc.outQueue, wantHeader) || !bytes.Contains(nc.outQueue, wantError) {
+		t.Fatalf("NC compiler missing-output response = % X, want header % X and error % X", nc.outQueue, wantHeader, wantError)
 	}
 }
 
@@ -642,9 +644,10 @@ func TestNCWeaponAddWarnsWhenClientsideScriptCannotCompileWithoutCompiler(t *tes
 	if server.GetWeapon("test") == nil {
 		t.Fatalf("weapon was not saved when compiler was unavailable")
 	}
-	want := append([]byte{PLO_RC_CHAT + 32}, []byte("Script compiler output for Weapon test:\xa7warning: gs2compiler is not configured; saved without compile feedback")...)
-	if !bytes.Contains(nc.outQueue, want) {
-		t.Fatalf("NC compiler warning response = % X, want contains % X", nc.outQueue, want)
+	wantHeader := append([]byte{PLO_RC_CHAT + 32}, []byte("Script compiler output for Weapon test:")...)
+	wantWarning := append([]byte{PLO_RC_CHAT + 32}, []byte("warning: gs2compiler is not configured; saved without compile feedback")...)
+	if !bytes.Contains(nc.outQueue, wantHeader) || !bytes.Contains(nc.outQueue, wantWarning) {
+		t.Fatalf("NC compiler warning response = % X, want header % X and warning % X", nc.outQueue, wantHeader, wantWarning)
 	}
 }
 
@@ -1659,6 +1662,30 @@ func TestRCPlayerPropsGet2SendsLoadedAccountProps(t *testing.T) {
 	}
 }
 
+func TestRCPlayerPropsGet3ParsesString8AccountName(t *testing.T) {
+	server := newLoginTestServer(t)
+	writeTestFile(t, server.config.GetBasePath(), "accounts/moondeath.txt", ""+
+		"GRACC001\n"+
+		"NICK moondeath\n"+
+		"BODY body.png\n"+
+		"KILLS 7\n")
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.accountName = "Admin"
+	rc.adminRights = PLPERM_VIEWATTRIBUTES
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	packet := append([]byte{PLI_RC_PLAYERPROPSGET3, byte(len("moondeath"))}, []byte("moondeath")...)
+	if !rc.msgPLI_RC_PLAYERPROPSGET3(packet) {
+		t.Fatal("msgPLI_RC_PLAYERPROPSGET3 returned false")
+	}
+
+	if !bytes.Contains(rc.outQueue, []byte("moondeath")) || !bytes.Contains(rc.outQueue, append([]byte{PLPROP_KILLSCOUNT + 32}, NewBuffer().WriteGInt(7).Bytes()...)) {
+		t.Fatalf("player props by account response missing loaded account data: % X", rc.outQueue)
+	}
+}
+
 func TestRCPlayerRightsGetNetworkPayloadUsesRawAccountAndGInt5Rights(t *testing.T) {
 	server := newLoginTestServer(t)
 	rc := NewPlayer(nil, server)
@@ -1680,6 +1707,70 @@ func TestRCPlayerRightsGetNetworkPayloadUsesRawAccountAndGInt5Rights(t *testing.
 	want.WriteByte('\n')
 	if !bytes.Contains(rc.outQueue, want.Bytes()) {
 		t.Fatalf("rights response = % X, want % X", rc.outQueue, want.Bytes())
+	}
+}
+
+func TestRCPlayerRightsGetTokenizesFolderRights(t *testing.T) {
+	server := newLoginTestServer(t)
+	writeTestFile(t, server.config.GetBasePath(), "accounts/moondeath.txt", ""+
+		"GRACC001\n"+
+		"NICK moondeath\n"+
+		"LOCALRIGHTS 255\n"+
+		"IPRANGE 0.0.0.0\n"+
+		"FOLDERRIGHT rw *.nw\n"+
+		"FOLDERRIGHT rw levels/*.graal\n")
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.accountName = "Admin"
+	rc.adminRights = PLPERM_SETRIGHTS
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	if !rc.msgPLI_RC_PLAYERRIGHTSGET(append([]byte{PLI_RC_PLAYERRIGHTSGET}, []byte("moondeath")...)) {
+		t.Fatal("msgPLI_RC_PLAYERRIGHTSGET returned false")
+	}
+
+	wantFolders := []byte("\"rw *.nw\",\"rw levels/*.graal\"")
+	if !bytes.Contains(rc.outQueue, wantFolders) {
+		t.Fatalf("rights response missing tokenized folders: % X, want %q", rc.outQueue, wantFolders)
+	}
+}
+
+func TestRCPlayerRightsSetReadsGInt5Rights(t *testing.T) {
+	server := newLoginTestServer(t)
+	writeTestFile(t, server.config.GetBasePath(), "accounts/moondeath.txt", ""+
+		"GRACC001\n"+
+		"NICK moondeath\n"+
+		"LOCALRIGHTS 0\n")
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.accountName = "Admin"
+	rc.adminRights = allLocalRights()
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_RC_PLAYERRIGHTSSET)
+	packet.WriteString8("moondeath")
+	packet.WriteGInt5(uint64(PLPERM_NPCCONTROL | PLPERM_SETRIGHTS))
+	packet.WriteString8("127.0.0.1")
+	folders := gtokenizeText("rw *.nw")
+	packet.WriteShort(int16(len(folders)))
+	packet.Write([]byte(folders))
+	if !rc.msgPLI_RC_PLAYERRIGHTSSET(packet.Bytes()) {
+		t.Fatal("msgPLI_RC_PLAYERRIGHTSSET returned false")
+	}
+
+	target := NewPlayer(nil, server)
+	if !target.LoadAccount("moondeath", false) {
+		t.Fatal("load target account failed")
+	}
+	wantRights := PLPERM_NPCCONTROL | PLPERM_SETRIGHTS
+	if target.adminRights != wantRights || target.adminIp != "127.0.0.1" {
+		t.Fatalf("saved rights/ip = %d/%q, want %d/127.0.0.1", target.adminRights, target.adminIp, wantRights)
+	}
+	if got := strings.Join(target.folderList, "\n"); got != "rw *.nw" {
+		t.Fatalf("saved folders = %q, want rw *.nw", got)
 	}
 }
 

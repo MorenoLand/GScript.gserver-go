@@ -36,6 +36,24 @@ func readRCAccountPayload(packet []byte, packetId byte) string {
 	return sanitizeRCAccountName(string(payload))
 }
 
+func readRCString8AccountPayload(packet []byte, packetId byte) string {
+	payload := rcPayload(packet, packetId)
+	if len(payload) == 0 {
+		return ""
+	}
+	nameLen := int(payload[0])
+	if nameLen <= len(payload)-1 {
+		if accountName := sanitizeRCAccountName(string(payload[1 : 1+nameLen])); accountName != "" {
+			return accountName
+		}
+	}
+	buf := NewBufferFromBytes(payload)
+	if account := buf.ReadGString(); account != "" {
+		return sanitizeRCAccountName(account)
+	}
+	return sanitizeRCAccountName(string(payload))
+}
+
 func sanitizeRCAccountName(accountName string) string {
 	accountName = strings.TrimSpace(accountName)
 	if idx := strings.Index(accountName, "/"); idx != -1 {
@@ -533,7 +551,7 @@ func (p *Player) msgPLI_RC_PLAYERPROPSGET2(packet []byte) bool {
 	return true
 }
 func (p *Player) msgPLI_RC_PLAYERPROPSGET3(packet []byte) bool {
-	accountName := readRCAccountPayload(packet, PLI_RC_PLAYERPROPSGET3)
+	accountName := readRCString8AccountPayload(packet, PLI_RC_PLAYERPROPSGET3)
 	targetPlayer := p.server.getPlayerByAccount(accountName, PLTYPE_ANYCLIENT)
 	if targetPlayer == nil {
 		if !p.server.accountExists(accountName) {
@@ -860,7 +878,7 @@ func (p *Player) msgPLI_RC_PLAYERRIGHTSGET(packet []byte) bool {
 		}
 		targetPlayer = tempPlayer
 	}
-	folders := strings.Join(targetPlayer.folderList, "\n")
+	folders := gtokenizeText(strings.Join(targetPlayer.folderList, "\n"))
 	buf2 := NewBuffer()
 	buf2.WriteByte(PLO_RC_PLAYERRIGHTSGET)
 	buf2.WriteString8(accountName)
@@ -872,7 +890,7 @@ func (p *Player) msgPLI_RC_PLAYERRIGHTSGET(packet []byte) bool {
 	return true
 }
 func (p *Player) msgPLI_RC_PLAYERRIGHTSSET(packet []byte) bool {
-	buf := NewBufferFromBytes(packet)
+	buf := NewBufferFromBytes(rcPayload(packet, PLI_RC_PLAYERRIGHTSSET))
 	accountNameLen := buf.ReadByte()
 	accountName := string(buf.ReadBytes(int(accountNameLen)))
 	if idx := strings.Index(accountName, "/"); idx != -1 {
@@ -901,7 +919,7 @@ func (p *Player) msgPLI_RC_PLAYERRIGHTSSET(packet []byte) bool {
 		}
 		targetPlayer = tempPlayer
 	}
-	newAdminRights := buf.ReadInt()
+	newAdminRights := int32(buf.ReadGInt5())
 	if !p.hasRight(PLPERM_MODIFYSTAFFACCOUNT) {
 		for i := 0; i < 20; i++ {
 			if (p.adminRights & (1 << i)) == 0 {
@@ -922,7 +940,7 @@ func (p *Player) msgPLI_RC_PLAYERRIGHTSSET(packet []byte) bool {
 	adminIp := string(buf.ReadBytes(int(adminIpLen)))
 	targetPlayer.adminIp = adminIp
 	foldersLen := buf.ReadShort()
-	folders := string(buf.ReadBytes(int(foldersLen)))
+	folders := guntokenizeText(string(buf.ReadBytes(int(foldersLen))))
 	folderList := strings.Split(folders, "\n")
 	validFolders := []string{}
 	for _, folder := range folderList {

@@ -425,11 +425,11 @@ func (p *Player) msgPLI_NC_WEAPONADD(packet []byte) bool {
 	weaponCode = strings.ReplaceAll(weaponCode, "\xa7", "\n")
 	compileResult := p.server.compileGS2ForFeedback("weapon", weaponName, weaponCode)
 	if compileResult.errText != "" {
-		p.server.sendToNC(formatGS2CompilerOutput("Weapon "+weaponName, "error", compileResult.errText))
+		p.server.sendGS2CompilerOutputToNC("Weapon "+weaponName, "error", compileResult.errText)
 		return true
 	}
 	if compileResult.warningText != "" {
-		p.server.sendToNC(formatGS2CompilerOutput("Weapon "+weaponName, "warning", compileResult.warningText))
+		p.server.sendGS2CompilerOutputToNC("Weapon "+weaponName, "warning", compileResult.warningText)
 	}
 	actionTaken := ""
 	weapon := p.server.GetWeapon(weaponName)
@@ -462,22 +462,23 @@ func (p *Player) msgPLI_NC_WEAPONADD(packet []byte) bool {
 	return true
 }
 
-func formatGS2CompilerOutput(origin, level, text string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "Script compiler output for %s:\xa7", origin)
+func (s *Server) sendGS2CompilerOutputToNC(origin, level, text string) {
+	if s == nil {
+		return
+	}
+	s.sendToNC(fmt.Sprintf("Script compiler output for %s:", origin))
 	wroteLine := false
 	for _, line := range strings.Split(text, "\n") {
 		line = normalizeCompilerOutputLine(line)
 		if line == "" {
 			continue
 		}
-		fmt.Fprintf(&b, "%s: %s\xa7", level, line)
+		s.sendToNC(fmt.Sprintf("%s: %s", level, line))
 		wroteLine = true
 	}
 	if !wroteLine {
-		fmt.Fprintf(&b, "%s: compiler failed\xa7", level)
+		s.sendToNC(fmt.Sprintf("%s: compiler failed", level))
 	}
-	return strings.TrimRight(b.String(), "\xa7")
 }
 
 func normalizeCompilerOutputLine(line string) string {
