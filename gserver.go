@@ -975,6 +975,20 @@ func (s *Server) getPlayerByAccount(accountName string, playerType int) *Player 
 	return nil
 }
 
+func (s *Server) findPlayerByAccountOrNick(name string, playerType int) *Player {
+	s.playerMu.RLock()
+	defer s.playerMu.RUnlock()
+	for _, p := range s.players {
+		if playerType != 0 && p.playerType != playerType && p.playerType&playerType == 0 {
+			continue
+		}
+		if strings.EqualFold(p.accountName, name) || strings.EqualFold(p.character.nickName, name) {
+			return p
+		}
+	}
+	return nil
+}
+
 func (s *Server) nextGuestPCAccountName() string {
 	if s == nil {
 		return "pc:000000"
@@ -4325,6 +4339,7 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 	preciseMoveBuff := NewBuffer()
 	for buf.BytesLeft() > 0 {
 		propId := buf.ReadGChar()
+		propConsumed := false
 		p.server.logger.Debug("msgPLI_PLAYERPROPS: propId=%d", propId)
 		switch propId {
 		case PLPROP_NICKNAME:
@@ -4435,7 +4450,12 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 			_ = buf.ReadGChar()
 		case PLPROP_PCONNECTED:
 		case PLPROP_CURCHAT:
-			p.character.chatMessage = buf.ReadGCharString()
+			chat := buf.ReadGCharString()
+			if p.handlePlayerChatCommand(chat) {
+				propConsumed = true
+			} else {
+				p.character.chatMessage = chat
+			}
 		case PLPROP_PLANGUAGE:
 			p.language = buf.ReadGCharString()
 		case PLPROP_PSTATUSMSG:
@@ -4469,6 +4489,9 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 		default:
 			p.server.logger.Debug("msgPLI_PLAYERPROPS: unhandled propId=%d, stopping to avoid stream desync", propId)
 			return true
+		}
+		if propConsumed {
+			continue
 		}
 		p.appendPlayerPropDelta(int(propId), commonBuff, legacyMoveBuff, preciseMoveBuff)
 	}

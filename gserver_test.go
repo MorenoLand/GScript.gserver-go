@@ -5053,6 +5053,217 @@ func TestPlayerPropsForwardsChangedPropsToOtherPlayers(t *testing.T) {
 	}
 }
 
+func TestPlayerChatCommandWarptoUnauthorizedIsConsumed(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	server := &Server{
+		logger:   NewLogger("", false),
+		players:  make(map[uint16]*Player),
+		levels:   map[string]*Level{"onlinestartlocal": level},
+		settings: NewSettings(),
+	}
+	p := &Player{id: 1, server: server, currentLevel: level, playerType: PLTYPE_CLIENT3, loaded: true}
+	p.accountName = "moondeath"
+	p.levelName = "onlinestartlocal.nw"
+	other := &Player{id: 2, conn: serverConn, server: server, currentLevel: level, playerType: PLTYPE_CLIENT3, versionId: 222, encryption: *NewEncryption()}
+	other.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[p.id] = p
+	server.players[other.id] = other
+	level.players = []uint16{p.id, other.id}
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_CURCHAT).WriteGChar(byte(len("warpto 10 11"))).Write([]byte("warpto 10 11"))
+
+	done := make(chan struct{}, 1)
+	go func() {
+		p.msgPLI_PLAYERPROPS(packet.Bytes())
+		done <- struct{}{}
+	}()
+	<-done
+
+	if p.character.chatMessage != "(not authorized to warp)" {
+		t.Fatalf("chatMessage = %q, want unauthorized warp message", p.character.chatMessage)
+	}
+	clientConn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+	buf := make([]byte, 1)
+	if n, err := clientConn.Read(buf); err == nil || n != 0 {
+		t.Fatalf("command chat was forwarded: n=%d err=%v byte=% X", n, err, buf[:n])
+	}
+}
+
+func TestPlayerChatCommandWarptoPlayerUsesTargetLocation(t *testing.T) {
+	dir := t.TempDir()
+	level := NewLevel()
+	level.levelName = "targetlevel"
+	server := &Server{
+		logger:   NewLogger("", false),
+		players:  make(map[uint16]*Player),
+		levels:   map[string]*Level{"targetlevel": level},
+		settings: NewSettings(),
+		config:   NewFileSystem(dir),
+	}
+	p := NewPlayer(nil, server)
+	p.id = 1
+	p.playerType = PLTYPE_CLIENT3
+	p.loaded = true
+	p.queueOutgoing = true
+	p.accountName = "moondeath"
+	p.adminRights = PLPERM_WARPTOPLAYER
+	target := NewPlayer(nil, server)
+	target.id = 2
+	target.playerType = PLTYPE_CLIENT3
+	target.loaded = true
+	target.accountName = "YzdYaseen"
+	target.character.nickName = "YzdYaseen"
+	target.currentLevel = level
+	target.levelName = "targetlevel.nw"
+	target.x = 320
+	target.y = 336
+	server.players[p.id] = p
+	server.players[target.id] = target
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_CURCHAT).WriteGChar(byte(len("warpto YzdYaseen"))).Write([]byte("warpto YzdYaseen"))
+
+	if !p.msgPLI_PLAYERPROPS(packet.Bytes()) {
+		t.Fatal("msgPLI_PLAYERPROPS returned false")
+	}
+	if p.levelName != "targetlevel.nw" || p.x != 320 || p.y != 336 {
+		t.Fatalf("warpto target = level %q x=%d y=%d, want targetlevel.nw 320 336", p.levelName, p.x, p.y)
+	}
+}
+
+func TestPlayerChatCommandWarptoXYAndLevel(t *testing.T) {
+	dir := t.TempDir()
+	level := NewLevel()
+	level.levelName = "onlinestartlocal"
+	server := &Server{
+		logger:   NewLogger("", false),
+		players:  make(map[uint16]*Player),
+		levels:   map[string]*Level{"onlinestartlocal": level},
+		settings: NewSettings(),
+		config:   NewFileSystem(dir),
+	}
+	p := NewPlayer(nil, server)
+	p.id = 1
+	p.playerType = PLTYPE_CLIENT3
+	p.loaded = true
+	p.queueOutgoing = true
+	p.accountName = "moondeath"
+	p.adminRights = PLPERM_WARPTO
+	p.currentLevel = level
+	p.levelName = "onlinestartlocal.nw"
+	server.players[p.id] = p
+	level.players = []uint16{p.id}
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_CURCHAT).WriteGChar(byte(len("warpto 7 8"))).Write([]byte("warpto 7 8"))
+	if !p.msgPLI_PLAYERPROPS(packet.Bytes()) {
+		t.Fatal("msgPLI_PLAYERPROPS returned false")
+	}
+	if p.levelName != "onlinestartlocal.nw" || p.x != 112 || p.y != 128 {
+		t.Fatalf("warpto xy = level %q x=%d y=%d, want onlinestartlocal.nw 112 128", p.levelName, p.x, p.y)
+	}
+
+	packet = NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_CURCHAT).WriteGChar(byte(len("warpto 9 10 otherlevel.nw"))).Write([]byte("warpto 9 10 otherlevel.nw"))
+	if !p.msgPLI_PLAYERPROPS(packet.Bytes()) {
+		t.Fatal("msgPLI_PLAYERPROPS returned false")
+	}
+	if p.levelName != "otherlevel.nw" || p.x != 144 || p.y != 160 {
+		t.Fatalf("warpto xy level = level %q x=%d y=%d, want otherlevel.nw 144 160", p.levelName, p.x, p.y)
+	}
+}
+
+func TestPlayerChatCommandUnstickMeWarpsToConfiguredStart(t *testing.T) {
+	dir := t.TempDir()
+	server := &Server{
+		logger:   NewLogger("", false),
+		players:  make(map[uint16]*Player),
+		levels:   make(map[string]*Level),
+		settings: NewSettings(),
+		config:   NewFileSystem(dir),
+	}
+	server.settings.Set("unstickmetime", "0")
+	server.settings.Set("unstickmelevel", "unstickhouse.nw")
+	server.settings.Set("unstickmex", "12.5")
+	server.settings.Set("unstickmey", "13.5")
+	p := NewPlayer(nil, server)
+	p.id = 1
+	p.playerType = PLTYPE_CLIENT3
+	p.loaded = true
+	p.queueOutgoing = true
+	p.accountName = "moondeath"
+	p.levelName = "stuck.nw"
+	p.currentLevel = &Level{levelName: "stuck"}
+	p.lastMovement = time.Now().Add(-time.Minute)
+	server.players[p.id] = p
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_CURCHAT).WriteGChar(byte(len("unstick me"))).Write([]byte("unstick me"))
+
+	if !p.msgPLI_PLAYERPROPS(packet.Bytes()) {
+		t.Fatal("msgPLI_PLAYERPROPS returned false")
+	}
+	if p.levelName != "unstickhouse.nw" || p.x != 200 || p.y != 216 {
+		t.Fatalf("unstick warp = level %q x=%d y=%d, want unstickhouse.nw 200 216", p.levelName, p.x, p.y)
+	}
+	if p.character.chatMessage != "Warped!" {
+		t.Fatalf("chatMessage = %q, want Warped!", p.character.chatMessage)
+	}
+}
+
+func TestPlayerChatCommandUpdateLevelReloadsCurrentLevel(t *testing.T) {
+	dir := t.TempDir()
+	server := &Server{
+		logger:   NewLogger("", false),
+		players:  make(map[uint16]*Player),
+		levels:   make(map[string]*Level),
+		settings: NewSettings(),
+		config:   NewFileSystem(dir),
+	}
+	level := &Level{
+		levelName:      "onlinestartlocal",
+		fileName:       "onlinestartlocal.nw",
+		boardChanges:   []LevelBoardChange{{x: 1, y: 2, width: 1, height: 1}},
+		tiles:          make(map[uint8]*LevelTiles),
+		baddies:        make(map[uint8]*LevelBaddy),
+		npcs:           make(map[uint32]*NPC),
+		players:        []uint16{1},
+		isSparringZone: true,
+	}
+	server.levels[level.levelName] = level
+	p := NewPlayer(nil, server)
+	p.id = 1
+	p.playerType = PLTYPE_CLIENT3
+	p.loaded = true
+	p.accountName = "moondeath"
+	p.adminRights = PLPERM_UPDATELEVEL
+	p.levelName = "onlinestartlocal.nw"
+	p.currentLevel = level
+	server.players[p.id] = p
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_CURCHAT).WriteGChar(byte(len("update level"))).Write([]byte("update level"))
+
+	if !p.msgPLI_PLAYERPROPS(packet.Bytes()) {
+		t.Fatal("msgPLI_PLAYERPROPS returned false")
+	}
+	if len(level.boardChanges) != 0 || level.isSparringZone {
+		t.Fatalf("level was not reloaded: boardChanges=%d spar=%v", len(level.boardChanges), level.isSparringZone)
+	}
+}
+
 func TestPlayerPropsForwardsCarrySpriteAsRawByte(t *testing.T) {
 	level := NewLevel()
 	level.levelName = "onlinestartlocal.nw"

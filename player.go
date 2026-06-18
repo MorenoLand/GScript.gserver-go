@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 )
 
 var defaultClientFilePatterns = []string{
@@ -24,6 +26,120 @@ func isDefaultClientFile(fileName string) bool {
 		}
 	}
 	return false
+}
+
+func (p *Player) handlePlayerChatCommand(chat string) bool {
+	trimmed := strings.TrimSpace(chat)
+	if trimmed == "" {
+		return false
+	}
+	words := strings.Fields(trimmed)
+	if len(words) == 0 {
+		return false
+	}
+	command := strings.ToLower(words[0])
+	switch command {
+	case "warpto":
+		return p.handlePlayerChatWarpto(words)
+	case "unstick", "unstuck":
+		if len(words) == 2 && strings.EqualFold(words[1], "me") {
+			return p.handlePlayerChatUnstickMe(trimmed)
+		}
+	case "update":
+		if strings.EqualFold(trimmed, "update level") && p.hasRight(PLPERM_UPDATELEVEL) {
+			if p.currentLevel != nil {
+				p.currentLevel.reload(p.server)
+			} else if level := p.server.GetLevel(cleanLevelName(p.levelName)); level != nil {
+				level.reload(p.server)
+			}
+			return true
+		}
+	}
+	return false
+}
+
+func (p *Player) handlePlayerChatWarpto(words []string) bool {
+	if len(words) == 2 {
+		if !p.hasRight(PLPERM_WARPTOPLAYER) && !p.server.allowsWarpToAll() {
+			p.character.chatMessage = "(not authorized to warp)"
+			return true
+		}
+		if player := p.server.findPlayerByAccountOrNick(words[1], PLTYPE_ANYCLIENT); player != nil && player.currentLevel != nil {
+			levelName := player.levelName
+			if levelName == "" {
+				levelName = player.currentLevel.levelName
+			}
+			p.warp(levelName, float64(player.x)/16.0, float64(player.y)/16.0)
+		}
+		return true
+	}
+	if len(words) == 3 || len(words) == 4 {
+		if !p.hasRight(PLPERM_WARPTO) && !p.server.allowsWarpToAll() {
+			p.character.chatMessage = "(not authorized to warp)"
+			return true
+		}
+		x, errX := strconv.ParseFloat(words[1], 64)
+		y, errY := strconv.ParseFloat(words[2], 64)
+		if errX != nil || errY != nil {
+			return true
+		}
+		if len(words) == 4 {
+			p.warp(words[3], x, y)
+			return true
+		}
+		p.setX(float32(x))
+		p.setY(float32(y))
+		legacyMove := NewBuffer()
+		preciseMove := NewBuffer()
+		p.appendPlayerPropDelta(PLPROP_X, NewBuffer(), legacyMove, preciseMove)
+		p.appendPlayerPropDelta(PLPROP_Y, NewBuffer(), legacyMove, preciseMove)
+		p.sendPlayerPropDeltasToCurrentLevel(nil, legacyMove.Bytes(), preciseMove.Bytes())
+		return true
+	}
+	return true
+}
+
+func (s *Server) allowsWarpToAll() bool {
+	return s != nil && s.settings != nil && s.settings.GetBool("warptoforall", false)
+}
+
+func (p *Player) handlePlayerChatUnstickMe(originalChat string) bool {
+	if p.server == nil || p.server.settings == nil {
+		return false
+	}
+	jailLevels := strings.Split(p.server.settings.Get("jaillevels"), ",")
+	for _, jailLevel := range jailLevels {
+		if strings.TrimSpace(jailLevel) == p.levelName {
+			return false
+		}
+	}
+	unstickTime := p.server.settings.GetInt("unstickmetime", 30)
+	if int(time.Since(p.lastMovement).Seconds()) < unstickTime {
+		p.character.chatMessage = fmt.Sprintf("Don't move for %d seconds before doing '%s'!", unstickTime, originalChat)
+		return true
+	}
+	p.lastMovement = time.Now()
+	levelName := p.server.settings.Get("unstickmelevel")
+	if levelName == "" {
+		levelName = "onlinestartlocal.nw"
+	}
+	x := getSettingsFloat(p.server.settings, "unstickmex", 30.0)
+	y := getSettingsFloat(p.server.settings, "unstickmey", 30.5)
+	p.warp(levelName, x, y)
+	p.character.chatMessage = "Warped!"
+	return true
+}
+
+func getSettingsFloat(settings *Settings, key string, defaultValue float64) float64 {
+	if settings == nil {
+		return defaultValue
+	}
+	if val := settings.Get(key); val != "" {
+		if parsed, err := strconv.ParseFloat(val, 64); err == nil {
+			return parsed
+		}
+	}
+	return defaultValue
 }
 
 var playerPropsRC = [PROPCOUNT]bool{
