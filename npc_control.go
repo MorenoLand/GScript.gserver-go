@@ -422,7 +422,7 @@ func (p *Player) msgPLI_NC_WEAPONADD(packet []byte) bool {
 	weaponImageLen := buf.ReadGChar()
 	weaponImage := string(buf.ReadBytes(int(weaponImageLen)))
 	weaponCode := buf.ReadString()
-	weaponCode = strings.ReplaceAll(weaponCode, "\xa7", "\n")
+	weaponCode = decodeNCScriptText(weaponCode)
 	compileResult := p.server.compileGS2ForFeedback("weapon", weaponName, weaponCode)
 	if compileResult.errText != "" {
 		p.server.sendGS2CompilerOutputToNC("Weapon "+weaponName, "error", compileResult.errText)
@@ -460,6 +460,16 @@ func (p *Player) msgPLI_NC_WEAPONADD(packet []byte) bool {
 		p.server.sendToNC(logMsg)
 	}
 	return true
+}
+
+func decodeNCScriptText(script string) string {
+	if strings.Contains(script, "\xa7") {
+		return strings.ReplaceAll(script, "\xa7", "\n")
+	}
+	if strings.HasPrefix(script, "\"") || strings.Contains(script, "\",") || strings.Contains(script, ",\"") {
+		return guntokenizeText(script)
+	}
+	return script
 }
 
 func (s *Server) sendGS2CompilerOutputToNC(origin, level, text string) {

@@ -973,6 +973,40 @@ func TestNCWeaponAddUpdatesExistingWeaponWithBytecodeFile(t *testing.T) {
 	}
 }
 
+func TestNCWeaponAddPreservesTokenizedScriptFormatting(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.weapons = map[string]*Weapon{}
+	nc := NewPlayer(nil, server)
+	nc.id = 3
+	nc.playerType = PLTYPE_NC
+	nc.accountName = "moondeath"
+	nc.loaded = true
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+
+	script := "function openGame() {\n  resetBoard();\n  if (isObject(\"_TicWin\")) _TicWin.destroy();\n}\n"
+	packet := NewBuffer()
+	packet.WriteByte(PLI_NC_WEAPONADD)
+	packet.WriteGChar(byte(len("test")))
+	packet.Write([]byte("test"))
+	packet.WriteGChar(byte(len("bcalarmclock.png")))
+	packet.Write([]byte("bcalarmclock.png"))
+	packet.WriteString(gtokenizeText(script))
+
+	if !nc.msgPLI_NC_WEAPONADD(packet.Bytes()) {
+		t.Fatalf("msgPLI_NC_WEAPONADD returned false")
+	}
+
+	weapon := server.GetWeapon("test")
+	if weapon == nil {
+		t.Fatal("weapon was not added")
+	}
+	if weapon.script != strings.TrimSuffix(script, "\n") {
+		t.Fatalf("saved script = %q, want %q", weapon.script, strings.TrimSuffix(script, "\n"))
+	}
+}
+
 func TestSendPacketToTypeDoesNotHoldPlayerLockWhileSending(t *testing.T) {
 	server := newLoginTestServer(t)
 	rc := NewPlayer(nil, server)
