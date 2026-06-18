@@ -44,7 +44,15 @@ func (n *NPCServer) Sync() {
 		return
 	}
 	if n.Enabled() {
-		if n.Player() == nil {
+		if player := n.Player(); player != nil {
+			n.applyPlayerSettings(player)
+			n.host.broadcastPlayerListEntryToClients(player)
+			for _, serverList := range n.host.serverLists {
+				if serverList != nil {
+					serverList.AddPlayer(player)
+				}
+			}
+		} else {
 			n.Start()
 		}
 		return
@@ -76,6 +84,7 @@ func (n *NPCServer) Start() *Player {
 		n.host.players = make(map[uint16]*Player)
 	}
 	if existing := n.Player(); existing != nil {
+		n.applyPlayerSettings(existing)
 		return existing
 	}
 
@@ -91,6 +100,38 @@ func (n *NPCServer) Start() *Player {
 	n.host.broadcastPlayerListEntryToClients(p)
 	n.host.logger.Info("NPC-Server initialized (id=%d account=%s nickname=%s type=%d x=%d y=%d)", p.id, p.accountName, p.character.nickName, p.playerType, int(p.x), int(p.y))
 	return p
+}
+
+func (n *NPCServer) configuredNickname() string {
+	nickName := ""
+	if n != nil && n.host != nil && n.host.settings != nil {
+		nickName = strings.TrimSpace(n.host.settings.Get("nickname"))
+	}
+	if nickName == "" {
+		nickName = "NPC-Server"
+	}
+	if !strings.Contains(strings.ToLower(nickName), "(server)") {
+		nickName += " (Server)"
+	}
+	return nickName
+}
+
+func (n *NPCServer) applyPlayerSettings(p *Player) {
+	if n == nil || n.host == nil || p == nil {
+		return
+	}
+	p.accountName = npcServerAccountName
+	p.id = 1
+	p.playerType = PLTYPE_NPCSERVER
+	p.loaded = true
+	p.accountIp = 0
+	p.accountIpStr = "0"
+	headImage := n.host.settings.Get("staffhead")
+	if headImage == "" {
+		headImage = "head25.png"
+	}
+	p.character.headImage = headImage
+	p.setNickname(n.configuredNickname())
 }
 
 func (n *NPCServer) SendNCAddress(to *Player, queryPacket []byte) bool {
@@ -209,19 +250,7 @@ func (n *NPCServer) newNPCPlayer() *Player {
 		p.accountIp = 0
 		p.accountIpStr = "0"
 	}
-	p.character.headImage = n.host.settings.Get("staffhead")
-	if p.character.headImage == "" {
-		p.character.headImage = "head25.png"
-	}
-	if p.character.nickName == "" {
-		nickName := n.host.settings.Get("nickname")
-		if nickName == "" {
-			nickName = "NPC-Server"
-		}
-		p.setNickname(nickName + " (Server)")
-	} else {
-		p.setNickname(p.character.nickName)
-	}
+	n.applyPlayerSettings(p)
 	now := time.Now()
 	p.lastData = now
 	p.lastMovement = now

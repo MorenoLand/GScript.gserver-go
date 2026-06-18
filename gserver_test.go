@@ -151,6 +151,47 @@ func TestLoadSettingsSyncsNPCServerPlayer(t *testing.T) {
 	}
 }
 
+func TestLoadSettingsAppliesNPCServerNicknameFromServerOptions(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	accountsDir := filepath.Join(dir, "accounts")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.MkdirAll(accountsDir, 0755); err != nil {
+		t.Fatalf("create accounts dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(accountsDir, "(npcserver).txt"), []byte("GRACC001\nNICK Stale Account Nick\n"), 0644); err != nil {
+		t.Fatalf("write npcserver account: %v", err)
+	}
+	writeOptions := func(contents string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(configDir, "serveroptions.txt"), []byte(contents), 0644); err != nil {
+			t.Fatalf("write serveroptions: %v", err)
+		}
+	}
+
+	server := NewServer("Test")
+	server.config = NewFileSystem(dir)
+	server.logger = NewLogger("", false)
+
+	writeOptions("serverside = true\nnickname = Control-NPC\n")
+	server.loadSettings()
+	npc := server.players[1]
+	if npc == nil {
+		t.Fatal("npc-server player was not created")
+	}
+	if npc.character.nickName != "Control-NPC (Server)" {
+		t.Fatalf("npc-server nickname = %q, want Control-NPC (Server)", npc.character.nickName)
+	}
+
+	writeOptions("serverside = true\nnickname = Script-NPC\n")
+	server.loadSettings()
+	if npc.character.nickName != "Script-NPC (Server)" {
+		t.Fatalf("npc-server nickname after reload = %q, want Script-NPC (Server)", npc.character.nickName)
+	}
+}
+
 func TestSettingsLoadFromStringClearsRemovedOptions(t *testing.T) {
 	settings := NewSettings()
 	if err := settings.LoadFromString("name = Orion-Go\nserverside = true\n"); err != nil {
