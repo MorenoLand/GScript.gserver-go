@@ -6411,29 +6411,29 @@ func TestSendAccountWeaponCompilesClientsideScriptBeforeSending(t *testing.T) {
 	server.settings.Set("gs2compiler", os.Args[0])
 	server.settings.Set("gs2compilerargs", "-test.run=TestGS2CompilerHelperProcess --")
 	weapon := &Weapon{
-		name:   "test",
+		name:   "-gr_movement",
 		image:  "bcalarmclock.png",
 		script: "//#CLIENTSIDE\nfunction onCreated() {\n  player.chat = \"hi\";\n}",
 	}
-	server.weapons = map[string]*Weapon{"test": weapon}
+	server.weapons = map[string]*Weapon{"-gr_movement": weapon}
 	p := NewPlayer(nil, server)
 	p.queueOutgoing = true
 	p.encryption.SetGen(ENCRYPT_GEN_1)
 
-	if !p.sendAccountWeapon("test") {
+	if !p.sendAccountWeapon("-gr_movement") {
 		t.Fatal("sendAccountWeapon returned false")
 	}
-	if string(weapon.bytecode) != "bytecode:weapon:test" {
+	if string(weapon.bytecode) != "bytecode:weapon:-gr_movement" {
 		t.Fatalf("weapon bytecode = %q, want compiler output", weapon.bytecode)
 	}
-	if !bytes.Contains(p.outQueue, []byte("bytecode:weapon:test")) {
+	if !bytes.Contains(p.outQueue, []byte("bytecode:weapon:-gr_movement")) {
 		t.Fatalf("queued weapon packets missing bytecode: % X", p.outQueue)
 	}
-	bytecode, err := os.ReadFile(filepath.Join(server.config.GetBasePath(), "weapon_bytecode", "weapontest.gs2bc"))
+	bytecode, err := os.ReadFile(filepath.Join(server.config.GetBasePath(), "weapon_bytecode", "weapon-gr_movement.gs2bc"))
 	if err != nil {
 		t.Fatalf("read saved bytecode: %v", err)
 	}
-	if string(bytecode) != "bytecode:weapon:test" {
+	if string(bytecode) != "bytecode:weapon:-gr_movement" {
 		t.Fatalf("saved bytecode = %q, want compiler output", bytecode)
 	}
 }
@@ -6446,16 +6446,16 @@ func TestLoginCompilesAccountWeaponsBeforeSending(t *testing.T) {
 	writeTestFile(t, server.config.GetBasePath(), "accounts/moondeath.txt", ""+
 		"GRACC001\n"+
 		"NICK moondeath\n"+
-		"WEAPON test\n"+
+		"WEAPON -gr_movement\n"+
 		"LEVEL onlinestartlocal.nw\n"+
 		"X 4\n"+
 		"Y 4\n")
 	weapon := &Weapon{
-		name:   "test",
+		name:   "-gr_movement",
 		image:  "bcalarmclock.png",
 		script: "//#CLIENTSIDE\nfunction onCreated() {\n  player.chat = \"hi\";\n}",
 	}
-	server.weapons = map[string]*Weapon{"test": weapon}
+	server.weapons = map[string]*Weapon{"-gr_movement": weapon}
 	server.flags = make(map[string]string)
 	server.levels = make(map[string]*Level)
 	server.players = make(map[uint16]*Player)
@@ -6466,7 +6466,7 @@ func TestLoginCompilesAccountWeaponsBeforeSending(t *testing.T) {
 	if !p.handleLogin(buildLoginPacket(t, 5, 0, "G3D03014", "moondeath", "pass", "device-token")) {
 		t.Fatal("handleLogin returned false")
 	}
-	if string(weapon.bytecode) != "bytecode:weapon:test" {
+	if string(weapon.bytecode) != "bytecode:weapon:-gr_movement" {
 		t.Fatalf("weapon bytecode = %q, want compiler output", weapon.bytecode)
 	}
 }

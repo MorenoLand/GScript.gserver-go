@@ -2894,9 +2894,6 @@ func (p *Player) handleLogin(packet []byte) bool {
 	p.sendMissingDefaultWeaponDeletes()
 	p.server.logger.Info("Sending weapons...")
 	for _, weaponName := range p.weaponList {
-		if strings.HasPrefix(weaponName, "-") {
-			continue
-		}
 		p.sendAccountWeapon(weaponName)
 	}
 	if p.versionId >= 221 && p.versionId <= 231 {
