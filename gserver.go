@@ -257,12 +257,74 @@ func (s *Server) savePlayerAccounts() {
 
 func (s *Server) log(msg string) { s.logger.Write(msg) }
 func (s *Server) loadSettings() {
+	oldListserverConfig := s.listserverConfigKey()
 	if err := s.settings.Load(s.config.ResolvePath("config/serveroptions.txt")); err != nil {
 		s.logger.Error("Could not open config/serveroptions.txt. Will use default config.")
 	}
 	DEBUG_MODE = s.settings.GetBool("debugmode", false)
 	PACKET_DEBUG_MODE = s.settings.GetBool("packetdebugmode", false)
+	s.applyLoadedSettings(oldListserverConfig)
+}
+
+func (s *Server) applyLoadedSettings(oldListserverConfig string) {
+	if name := strings.TrimSpace(s.settings.Get("name")); name != "" {
+		s.name = name
+	}
+	s.loadServerMessage()
+	s.loadAllowedVersions()
 	s.syncNPCServer()
+	s.refreshOnlinePlayerSettings()
+	if oldListserverConfig != "" && oldListserverConfig != s.listserverConfigKey() {
+		s.reconfigureServerLists()
+		return
+	}
+	s.refreshListserverSettings()
+}
+
+func (s *Server) refreshOnlinePlayerSettings() {
+	players := s.GetAllPlayers()
+	for _, player := range players {
+		if player == nil || !player.isLoggedIn() {
+			continue
+		}
+		player.applyServerOptionsStaffRights()
+		if player.conn != nil && isPlayerListPlayer(player) {
+			player.sendStaffGuilds()
+			player.sendStatusList()
+		}
+	}
+}
+
+func (s *Server) listserverConfigKey() string {
+	if s == nil || s.settings == nil {
+		return ""
+	}
+	enabled := s.settings.GetBool("listserver", true)
+	endpoints := s.listserverEndpoints()
+	parts := make([]string, 0, len(endpoints)+1)
+	parts = append(parts, fmt.Sprintf("enabled=%t", enabled))
+	for _, endpoint := range endpoints {
+		parts = append(parts, endpoint.host+":"+endpoint.port)
+	}
+	return strings.Join(parts, "|")
+}
+
+func (s *Server) reconfigureServerLists() {
+	oldLists := s.serverLists
+	for _, serverList := range oldLists {
+		if serverList != nil {
+			serverList.Disconnect()
+		}
+	}
+	s.configureServerLists()
+}
+
+func (s *Server) refreshListserverSettings() {
+	for _, serverList := range s.serverLists {
+		if serverList != nil {
+			serverList.refreshServerSettings()
+		}
+	}
 }
 func (s *Server) loadAdminSettings() {
 	if err := s.adminSettings.Load(s.config.ResolvePath("config/adminconfig.txt")); err != nil {
@@ -7720,6 +7782,46 @@ func (sl *ServerList) Disconnect() {
 		sl.conn.Close()
 	}
 }
+
+func (sl *ServerList) refreshServerSettings() {
+	if sl == nil || !sl.connected {
+		return
+	}
+	name := sl.server.settings.Get("name")
+	if name == "" {
+		name = sl.server.name
+	}
+	desc := sl.server.settings.Get("description")
+	if desc == "" {
+		desc = sl.server.name
+	}
+	language := sl.server.settings.Get("language")
+	if language == "" {
+		language = "English"
+	}
+	url := sl.server.settings.Get("url")
+	if url == "" {
+		url = "http://www.graal.in/"
+	}
+	ip := sl.server.settings.Get("serverip")
+	if ip == "" {
+		ip = "AUTO"
+	}
+	port := sl.server.settings.Get("serverport")
+	if port == "" {
+		port = "14802"
+	}
+	sl.SetName(name)
+	sl.SetDesc(desc)
+	sl.SetLang(language)
+	sl.SetVers(APP_VERSION)
+	sl.SetUrl(url)
+	sl.SetIp(ip)
+	sl.SetPort(port)
+	sl.SetPlyr(sl.server.GetPlayerCount())
+	sl.sendVersionConfig()
+}
+
 func (sl *ServerList) SetName(name string) {
 	buf := NewBuffer()
 	buf.WriteGChar(SVO_SETNAME).WriteString8Encoded(name)

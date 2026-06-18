@@ -151,6 +151,70 @@ func TestLoadSettingsSyncsNPCServerPlayer(t *testing.T) {
 	}
 }
 
+func TestSettingsLoadFromStringClearsRemovedOptions(t *testing.T) {
+	settings := NewSettings()
+	if err := settings.LoadFromString("name = Orion-Go\nserverside = true\n"); err != nil {
+		t.Fatalf("LoadFromString initial: %v", err)
+	}
+	if err := settings.LoadFromString("name = Orion-Go\n"); err != nil {
+		t.Fatalf("LoadFromString update: %v", err)
+	}
+	if settings.GetBool("serverside", false) {
+		t.Fatal("removed serverside option stayed enabled")
+	}
+}
+
+func TestLoadSettingsAppliesRuntimeServerOptions(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "serveroptions.txt"), []byte("name = Orion-Live\nstaffguilds = Server,Admin\nplayerlisticons = Online,Busy\n"), 0644); err != nil {
+		t.Fatalf("write serveroptions: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "servermessage.html"), []byte("Live MOTD"), 0644); err != nil {
+		t.Fatalf("write servermessage: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "allowedversions.txt"), []byte("2.220\n6.037\n"), 0644); err != nil {
+		t.Fatalf("write allowedversions: %v", err)
+	}
+
+	server := NewServer("OldName")
+	server.config = NewFileSystem(dir)
+	server.logger = NewLogger("", false)
+	server.serverLists = nil
+	server.serverList = nil
+	client := NewPlayer(nil, server)
+	client.id = 2
+	client.playerType = PLTYPE_CLIENT3
+	client.accountName = "moondeath"
+	client.loaded = true
+	client.queueOutgoing = true
+	client.encryption.SetGen(ENCRYPT_GEN_1)
+	client.conn, _ = net.Pipe()
+	defer client.conn.Close()
+	server.players[client.id] = client
+
+	server.loadSettings()
+
+	if server.name != "Orion-Live" {
+		t.Fatalf("server name = %q, want Orion-Live", server.name)
+	}
+	if server.serverMessage != "Live MOTD" {
+		t.Fatalf("server message = %q, want Live MOTD", server.serverMessage)
+	}
+	if got := server.allowedVersionsListserverText(); got != "2.220,6.037" {
+		t.Fatalf("allowed versions = %q, want 2.220,6.037", got)
+	}
+	if !bytes.Contains(client.outQueue, []byte{PLO_STAFFGUILDS + 32}) {
+		t.Fatalf("client did not receive staffguild refresh: % X", client.outQueue)
+	}
+	if !bytes.Contains(client.outQueue, []byte{PLO_STATUSLIST + 32}) {
+		t.Fatalf("client did not receive statuslist refresh: % X", client.outQueue)
+	}
+}
+
 func TestLoadConfigFilesHonorsListserverFalse(t *testing.T) {
 	dir := t.TempDir()
 	configDir := filepath.Join(dir, "config")

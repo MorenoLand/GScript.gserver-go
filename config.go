@@ -21,8 +21,6 @@ type Settings struct {
 func NewSettings() *Settings { return &Settings{settings: make(map[string]string)} }
 
 func (s *Settings) Load(filename string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	file, err := os.Open(filename)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -31,6 +29,7 @@ func (s *Settings) Load(filename string) error {
 		return err
 	}
 	defer file.Close()
+	loaded := make(map[string]string)
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -39,10 +38,16 @@ func (s *Settings) Load(filename string) error {
 		}
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) == 2 {
-			s.settings[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+			loaded[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.settings = loaded
+	s.mu.Unlock()
+	return nil
 }
 
 func (s *Settings) Save(filename string) error {
@@ -93,8 +98,7 @@ func (s *Settings) Exists(key string) bool {
 }
 func (s *Settings) GetAll() map[string]string { s.mu.RLock(); defer s.mu.RUnlock(); return s.settings }
 func (s *Settings) LoadFromString(data string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	loaded := make(map[string]string)
 	scanner := bufio.NewScanner(strings.NewReader(data))
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -103,10 +107,16 @@ func (s *Settings) LoadFromString(data string) error {
 		}
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) == 2 {
-			s.settings[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+			loaded[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
 		}
 	}
-	return scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.settings = loaded
+	s.mu.Unlock()
+	return nil
 }
 
 // Logger handles server logging
