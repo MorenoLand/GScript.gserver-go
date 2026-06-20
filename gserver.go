@@ -77,7 +77,10 @@ type Server struct {
 	wordFilter      *WordFilter
 	scriptHelpMu    sync.RWMutex
 	scriptHelp      []ScriptHelpEntry
+	scriptHelpRaw   string
 	scriptHelpReady bool
+	scriptHelpCheck time.Time
+	scriptHelpBusy  bool
 }
 
 func NewServer(name string) *Server {

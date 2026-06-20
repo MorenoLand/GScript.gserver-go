@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"time"
 )
+
+const scriptHelpCacheTTL = 30 * time.Minute
 
 type ScriptHelpEntry struct {
 	Name        string   `json:"name"`
@@ -842,6 +845,19 @@ func (s *Server) refreshScriptHelpCache() {
 	if s == nil {
 		return
 	}
+	s.scriptHelpMu.Lock()
+	if s.scriptHelpBusy {
+		s.scriptHelpMu.Unlock()
+		return
+	}
+	s.scriptHelpBusy = true
+	s.scriptHelpMu.Unlock()
+	defer func() {
+		s.scriptHelpMu.Lock()
+		s.scriptHelpBusy = false
+		s.scriptHelpCheck = time.Now()
+		s.scriptHelpMu.Unlock()
+	}()
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Get("https://api.gscript.dev")
 	if err != nil {
@@ -857,8 +873,22 @@ func (s *Server) refreshScriptHelpCache() {
 		}
 		return
 	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warning("Script help cache read failed: %v", err)
+		}
+		return
+	}
+	rawText := string(data)
+	s.scriptHelpMu.RLock()
+	unchanged := s.scriptHelpReady && s.scriptHelpRaw == rawText
+	s.scriptHelpMu.RUnlock()
+	if unchanged {
+		return
+	}
 	var raw map[string]ScriptHelpEntry
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+	if err := json.Unmarshal(data, &raw); err != nil {
 		if s.logger != nil {
 			s.logger.Warning("Script help cache decode failed: %v", err)
 		}
@@ -874,8 +904,22 @@ func (s *Server) refreshScriptHelpCache() {
 	sort.Slice(entries, func(i, j int) bool { return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name) })
 	s.scriptHelpMu.Lock()
 	s.scriptHelp = entries
+	s.scriptHelpRaw = rawText
 	s.scriptHelpReady = true
 	s.scriptHelpMu.Unlock()
+}
+
+func (s *Server) refreshScriptHelpCacheIfStale() {
+	if s == nil {
+		return
+	}
+	s.scriptHelpMu.RLock()
+	stale := !s.scriptHelpReady || time.Since(s.scriptHelpCheck) >= scriptHelpCacheTTL
+	busy := s.scriptHelpBusy
+	s.scriptHelpMu.RUnlock()
+	if stale && !busy {
+		go s.refreshScriptHelpCache()
+	}
 }
 
 func (p *Player) sendScriptHelp(query string) bool {
@@ -884,6 +928,7 @@ func (p *Player) sendScriptHelp(query string) bool {
 		p.sendPLO_RC_CHAT("Usage: /scripthelp <name or wildcard>")
 		return true
 	}
+	p.server.refreshScriptHelpCacheIfStale()
 	p.server.scriptHelpMu.RLock()
 	ready := p.server.scriptHelpReady
 	entries := append([]ScriptHelpEntry(nil), p.server.scriptHelp...)
