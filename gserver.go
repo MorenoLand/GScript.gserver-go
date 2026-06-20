@@ -7116,6 +7116,7 @@ type Weapon struct {
 	name, image, script string
 	bytecode            []byte
 	bytecodeFile        string
+	vmThis              map[string]any
 	defPlayer           bool
 	modified            bool
 }

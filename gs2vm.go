@@ -13,6 +13,7 @@ type gs2VMResult struct {
 	clientTriggers []string
 	playerFlags    []gs2VMPlayerFlag
 	playerMessages []gs2VMPlayerMessage
+	this           map[string]any
 	err            string
 }
 
@@ -32,6 +33,10 @@ func (s *Server) runServerSideGS2(scriptType, scriptName, eventName, script stri
 }
 
 func (s *Server) runServerSideGS2Native(scriptType, scriptName, eventName, script string, playerContext map[string]string, eventArgs ...string) gs2VMResult {
+	return s.runServerSideGS2NativeWithState(scriptType, scriptName, eventName, script, nil, playerContext, eventArgs...)
+}
+
+func (s *Server) runServerSideGS2NativeWithState(scriptType, scriptName, eventName, script string, thisState map[string]any, playerContext map[string]string, eventArgs ...string) gs2VMResult {
 	src := serversideGS2(script)
 	if strings.TrimSpace(src) == "" {
 		return gs2VMResult{}
@@ -47,10 +52,11 @@ func (s *Server) runServerSideGS2Native(scriptType, scriptName, eventName, scrip
 		Player:        playerContext,
 		PlayerFlags:   s.snapshotGS2PlayerFlags(playerContext["account"]),
 		Players:       s.snapshotGS2Players(),
+		This:          thisState,
 		ServerFlags:   s.snapshotServerFlags(),
 		ServerOptions: s.snapshotServerOptions(),
 	})
-	out := gs2VMResult{output: result.Output, err: result.Err}
+	out := gs2VMResult{output: result.Output, this: result.This, err: result.Err}
 	for _, trigger := range result.ClientTriggers {
 		parts := []string{trigger.Name}
 		parts = append(parts, trigger.Args...)
@@ -183,11 +189,12 @@ func (s *Server) runServerSideWeaponEventForPlayer(weapon *Weapon, eventName str
 	if s == nil || weapon == nil || weapon.script == "" {
 		return
 	}
-	result := s.runServerSideGS2ForPlayer("weapon", weapon.name, eventName, weapon.script, player, eventArgs...)
+	result := s.runServerSideWeaponGS2ForPlayer(weapon, eventName, player, eventArgs...)
 	if result.err != "" {
-		s.sendToNC(fmt.Sprintf("GS2 VM error for Weapon %s: %s", weapon.name, result.err))
+		s.sendGS2VMErrorToNC("Weapon "+weapon.name, result.err)
 		return
 	}
+	weapon.vmThis = result.this
 	s.applyGS2VMResult(result)
 	if player != nil {
 		for _, action := range result.clientTriggers {
@@ -202,6 +209,53 @@ func (s *Server) runServerSideWeaponEventForPlayer(weapon *Weapon, eventName str
 
 func (s *Server) runServerSideGS2ForPlayer(scriptType, scriptName, eventName, script string, player *Player, eventArgs ...string) gs2VMResult {
 	return s.runServerSideGS2Native(scriptType, scriptName, eventName, script, snapshotGS2Player(player), eventArgs...)
+}
+
+func (s *Server) runServerSideWeaponGS2ForPlayer(weapon *Weapon, eventName string, player *Player, eventArgs ...string) gs2VMResult {
+	if weapon == nil {
+		return gs2VMResult{}
+	}
+	return s.runServerSideGS2NativeWithState("weapon", weapon.name, eventName, weapon.script, weapon.vmThis, snapshotGS2Player(player), eventArgs...)
+}
+
+func (s *Server) sendGS2VMErrorToNC(origin, text string) {
+	if s == nil {
+		return
+	}
+	s.sendToNC(fmt.Sprintf("Compiler error for %s:", origin))
+	wroteLine := false
+	for _, line := range strings.Split(text, "\n") {
+		line = normalizeGS2VMErrorLine(line)
+		if line == "" {
+			continue
+		}
+		s.sendToNC("error: " + line)
+		wroteLine = true
+	}
+	if !wroteLine {
+		s.sendToNC("error: runtime failed")
+	}
+}
+
+func normalizeGS2VMErrorLine(line string) string {
+	line = normalizeCompilerOutputLine(line)
+	lower := strings.ToLower(line)
+	if strings.HasPrefix(lower, "typeerror:") {
+		line = strings.TrimSpace(line[len("TypeError:"):])
+	}
+	if idx := strings.Index(line, " at "); idx >= 0 {
+		if eval := strings.Index(line[idx:], "(<eval>:"); eval >= 0 {
+			evalStart := idx + eval + len("(<eval>:")
+			evalEnd := evalStart
+			for evalEnd < len(line) && line[evalEnd] >= '0' && line[evalEnd] <= '9' {
+				evalEnd++
+			}
+			if evalEnd > evalStart {
+				return strings.TrimSpace(line[:idx]) + " at line " + line[evalStart:evalEnd]
+			}
+		}
+	}
+	return strings.TrimSpace(line)
 }
 
 func (s *Server) applyGS2VMResult(result gs2VMResult) {

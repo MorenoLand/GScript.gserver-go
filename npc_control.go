@@ -440,6 +440,7 @@ func (p *Player) msgPLI_NC_WEAPONADD(packet []byte) bool {
 		weapon.image = weaponImage
 		weapon.script = weaponCode
 		weapon.bytecode = compileResult.bytecode
+		weapon.vmThis = nil
 		p.server.updateWeaponForPlayers(weapon)
 		actionTaken = "updated"
 	} else {

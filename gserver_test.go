@@ -364,6 +364,59 @@ func TestServerSideGS2FindPlayerSetsClientFlagsAndSendsPM(t *testing.T) {
 	}
 }
 
+func TestServerSideWeaponPersistsThisButNotTemp(t *testing.T) {
+	server := newLoginTestServer(t)
+	weapon := &Weapon{name: "-test", script: `function onCreated() {
+		temp.once = "gone";
+		this.saved = "kept";
+	}
+	function onActionServerside() {
+		if (this.saved == "kept" && typeof temp.once == "undefined") echo("ok");
+	}`}
+	server.AddWeapon(weapon)
+	nc := NewPlayer(nil, server)
+	nc.id = 7
+	nc.playerType = PLTYPE_NC
+	nc.accountName = "moondeath"
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+
+	server.runServerSideWeaponEvent(weapon, "onCreated")
+	server.runServerSideWeaponEvent(weapon, "onActionServerside")
+
+	if !bytes.Contains(nc.outQueue, append([]byte{PLO_RC_CHAT + 32}, []byte("ok")...)) {
+		t.Fatalf("expected persisted this output, got % X", nc.outQueue)
+	}
+}
+
+func TestServerSideWeaponVMErrorUsesCompilerOutputFormat(t *testing.T) {
+	server := newLoginTestServer(t)
+	weapon := &Weapon{name: "-test", script: `function onCreated() {
+		temp.foo = findplayer("missing");
+		temp.foo.sendpm("kek");
+	}`}
+	nc := NewPlayer(nil, server)
+	nc.id = 7
+	nc.playerType = PLTYPE_NC
+	nc.accountName = "moondeath"
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+
+	server.runServerSideWeaponEvent(weapon, "onCreated")
+
+	if !bytes.Contains(nc.outQueue, append([]byte{PLO_RC_CHAT + 32}, []byte("Compiler error for Weapon -test:")...)) {
+		t.Fatalf("missing compiler error header: % X", nc.outQueue)
+	}
+	if bytes.Contains(nc.outQueue, []byte("GS2 VM error")) {
+		t.Fatalf("raw VM error leaked into NC chat: % X", nc.outQueue)
+	}
+	if !bytes.Contains(nc.outQueue, []byte("sendpm")) {
+		t.Fatalf("missing cleaned VM error details: % X", nc.outQueue)
+	}
+}
+
 func TestSnapshotGS2PlayerUsesPCIDForGuestAccount(t *testing.T) {
 	player := &Player{}
 	player.accountName = "guest"
