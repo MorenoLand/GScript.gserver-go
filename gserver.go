@@ -229,6 +229,7 @@ func (s *Server) oneSecondEvents() {
 	players := s.GetAllPlayers()
 	for _, player := range players {
 		player.processTimeout()
+		player.processAP()
 	}
 }
 
@@ -1904,11 +1905,29 @@ func (a *Account) LoadAccount(accountName string, ignoreNick bool) bool {
 		a.isLoadOnly = true
 		a.isGuest = true
 		a.communityName = "guest"
-		a.accountName = a.server.nextGuestPCAccountName()
+		if a.deviceId > 0 {
+			a.applyGuestPCID(fmt.Sprintf("%d", a.deviceId))
+		} else {
+			a.accountName = a.server.nextGuestPCAccountName()
+		}
 	} else {
 		a.communityName = accountName
 	}
 	return true
+}
+
+func loginPCID(identity string) (int64, bool) {
+	identity = strings.TrimSpace(identity)
+	if identity == "" {
+		return 0, false
+	}
+	for _, r := range identity {
+		if r < '0' || r > '9' {
+			return 0, false
+		}
+	}
+	id, err := strconv.ParseInt(identity, 10, 64)
+	return id, err == nil && id > 0
 }
 
 func (a *Account) normalizeHealth() {
@@ -2871,6 +2890,11 @@ func (p *Player) handleLogin(packet []byte) bool {
 	identity := buf.ReadString()
 	p.server.logger.Debug("handleLogin: account=%s password=%s identity=%s", account, password, identity)
 	p.playerType = clientType
+	if strings.EqualFold(account, "guest") {
+		if pcID, ok := loginPCID(identity); ok {
+			p.deviceId = pcID
+		}
+	}
 	p.setAccountName(account)
 	p.setNickname(account)
 	p.setId(p.server.nextPlayerId())
@@ -3878,8 +3902,8 @@ func (p *Player) sendWeapon(weapon *Weapon) bool {
 	if weapon.image != "" {
 		buf.WriteGChar(NPCPROP_IMAGE).WriteGChar(byte(len(weapon.image))).Write([]byte(weapon.image))
 	}
-	if weapon.script != "" {
-		buf.WriteGChar(NPCPROP_SCRIPT).WriteGShort(uint16(len(weapon.script))).Write([]byte(weapon.script))
+	if script, ok := formatClientsideWeaponScript(weapon.script); ok {
+		buf.WriteGChar(NPCPROP_SCRIPT).WriteGShort(uint16(len(script))).Write([]byte(script))
 	}
 	p.send(buf)
 	if len(weapon.bytecode) > 0 {
@@ -3887,6 +3911,24 @@ func (p *Player) sendWeapon(weapon *Weapon) bool {
 		p.sendRawNpcWeaponScript(weapon.bytecode)
 	}
 	return true
+}
+
+func formatClientsideWeaponScript(script string) (string, bool) {
+	if strings.TrimSpace(script) == "" {
+		return "", false
+	}
+	const marker = "//#CLIENTSIDE"
+	idx := strings.Index(strings.ToUpper(script), marker)
+	if idx < 0 {
+		return script, true
+	}
+	clientScript := script[idx:]
+	lines := strings.Split(strings.ReplaceAll(clientScript, "\r\n", "\n"), "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		out = append(out, strings.TrimSpace(line))
+	}
+	return strings.Join(out, "\xa7") + "\xa7", true
 }
 
 func (p *Player) sendPLO_RC_ADMINMESSAGE(message string) bool {
@@ -4150,6 +4192,54 @@ func (p *Player) processTimeout() {
 	if time.Since(p.lastData) > 5*time.Minute {
 		p.disconnect()
 	}
+}
+
+func (p *Player) processAP() {
+	if p == nil || p.server == nil || p.server.settings == nil || p.playerType&PLTYPE_ANYCLIENT == 0 || !p.server.settings.GetBool("apsystem", false) || p.currentLevel == nil || p.status&PLSTATUS_PAUSED != 0 {
+		return
+	}
+	if p.apCounter > 0 {
+		p.apCounter--
+	}
+	if p.apCounter > 0 {
+		return
+	}
+	if p.character.ap < 100 {
+		p.character.ap++
+		p.alignment = p.character.ap
+		buf := NewBuffer()
+		buf.WriteGChar(PLPROP_ALIGNMENT).Write(p.getProp(PLPROP_ALIGNMENT))
+		p.sendPacket(append([]byte{PLO_PLAYERPROPS}, buf.Bytes()...))
+		p.sendPlayerPropDeltasToCurrentLevel(buf.Bytes(), nil, nil)
+	}
+	p.apCounter = uint8(p.apRechargeSeconds())
+}
+
+func (p *Player) apRechargeSeconds() int {
+	ap := p.character.ap
+	if ap < 20 {
+		return clampAPTime(p.server.settings.GetInt("aptime0", 30))
+	}
+	if ap < 40 {
+		return clampAPTime(p.server.settings.GetInt("aptime1", 90))
+	}
+	if ap < 60 {
+		return clampAPTime(p.server.settings.GetInt("aptime2", 300))
+	}
+	if ap < 80 {
+		return clampAPTime(p.server.settings.GetInt("aptime3", 600))
+	}
+	return clampAPTime(p.server.settings.GetInt("aptime4", 1200))
+}
+
+func clampAPTime(v int) int {
+	if v < 1 {
+		return 1
+	}
+	if v > 255 {
+		return 255
+	}
+	return v
 }
 
 func (p *Player) loginWarpTarget() (string, float64, float64) {
@@ -5151,8 +5241,20 @@ func (p *Player) msgPLI_WANTFILE(packet []byte) bool {
 	if len(packet) > 1 {
 		fileName := string(packet[1:])
 		p.server.logger.Debug("WANTFILE: %s", fileName)
+		if strings.EqualFold(filepath.Ext(fileName), ".gupd") {
+			if _, _, err := p.server.resolveRequestedFile(fileName); err == nil {
+				p.sendFile(fileName)
+			} else {
+				p.sendPLO_FILEUPTODATE(fileName)
+			}
+			return true
+		}
 		if isDefaultClientFile(fileName) {
-			p.sendPLO_FILEUPTODATE(fileName)
+			if _, _, err := p.server.resolveRequestedFile(fileName); err == nil {
+				p.sendFile(fileName)
+			} else {
+				p.sendPLO_FILEUPTODATE(fileName)
+			}
 			return true
 		}
 		p.sendFile(fileName)
@@ -7770,15 +7872,29 @@ func (sl *ServerList) handleAssignPCID(data []byte) {
 	if player == nil || pcID == "" {
 		return
 	}
-	if parsed, err := strconv.ParseInt(pcID, 10, 64); err == nil {
+	if parsed, ok := loginPCID(pcID); ok {
 		player.deviceId = parsed
 	}
-	if player.isGuest || strings.EqualFold(player.accountName, "guest") || strings.HasPrefix(strings.ToLower(player.accountName), "pc:") {
-		player.isGuest = true
-		player.isLoadOnly = true
-		player.accountName = "pc:" + pcID
-		player.communityName = "guest"
+	if player.applyGuestPCID(pcID) {
+		sl.server.refreshPlayerListEntry(player)
 	}
+}
+
+func (p *Account) applyGuestPCID(pcID string) bool {
+	pcID = strings.TrimSpace(pcID)
+	if p == nil || pcID == "" {
+		return false
+	}
+	if !(p.isGuest || strings.EqualFold(p.accountName, "guest") || strings.HasPrefix(strings.ToLower(p.accountName), "pc:")) {
+		return false
+	}
+	oldAccount := p.accountName
+	oldCommunity := p.communityName
+	p.isGuest = true
+	p.isLoadOnly = true
+	p.accountName = "pc:" + pcID
+	p.communityName = "guest"
+	return p.accountName != oldAccount || p.communityName != oldCommunity
 }
 
 func (sl *ServerList) handleRequestText(data []byte) {
@@ -8195,7 +8311,11 @@ func calculateCrc32Checksum(data []byte) uint32 {
 func (p *Player) sendFile(fileName string) {
 	resolvedName, data, err := p.server.resolveRequestedFile(fileName)
 	if err != nil {
-		p.server.logger.Warning("sendFile: Failed to load %s: %v", fileName, err)
+		if isDefaultClientFile(fileName) {
+			p.server.logger.Debug("sendFile: Client-default file not on server: %s", fileName)
+		} else {
+			p.server.logger.Warning("sendFile: Failed to load %s: %v", fileName, err)
+		}
 		p.sendPLO_FILESENDFAILED(fileName)
 		return
 	}
@@ -8203,9 +8323,13 @@ func (p *Player) sendFile(fileName string) {
 	if p.server != nil && p.server.config != nil {
 		modTime, _ = p.server.config.FileModTime(resolvedName)
 	}
+	modUnix := int64(0)
+	if !modTime.IsZero() && modTime.Unix() > 0 {
+		modUnix = modTime.Unix()
+	}
 	filePacket := NewBuffer()
 	filePacket.WriteGChar(PLO_FILE)
-	filePacket.WriteGInt5(uint64(modTime.Unix()))
+	filePacket.WriteGInt5(uint64(modUnix))
 	filePacket.WriteGChar(byte(len(fileName)))
 	filePacket.Write([]byte(fileName))
 	filePacket.Write(data)
@@ -8223,6 +8347,14 @@ func (p *Player) sendFile(fileName string) {
 func (s *Server) resolveRequestedFile(fileName string) (string, []byte, error) {
 	if data, err := s.config.LoadFile(fileName); err == nil {
 		return fileName, data, nil
+	}
+	if strings.EqualFold(filepath.Ext(fileName), ".gupd") {
+		packageName := strings.TrimSuffix(filepath.Base(fileName), filepath.Ext(fileName))
+		if data, err := s.config.LoadFile(filepath.ToSlash(filepath.Join("packages", packageName+".gupd"))); err == nil {
+			return filepath.ToSlash(filepath.Join("packages", packageName+".gupd")), data, nil
+		}
+		data, err := s.config.LoadFile(fileName)
+		return fileName, data, err
 	}
 	if strings.ContainsAny(fileName, `/\`) {
 		data, err := s.config.LoadFile(fileName)

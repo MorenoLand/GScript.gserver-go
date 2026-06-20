@@ -53,6 +53,61 @@ func TestLoadSettingsControlsPacketDebugSeparately(t *testing.T) {
 	}
 }
 
+func TestProcessAPIncrementsAndBroadcastsAlignment(t *testing.T) {
+	server := NewServer("Test")
+	server.settings = NewSettings()
+	server.settings.Set("apsystem", "true")
+	server.settings.Set("aptime2", "44")
+	server.players = make(map[uint16]*Player)
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	player := NewPlayer(nil, server)
+	player.id = 1
+	player.playerType = PLTYPE_CLIENT3
+	player.accountName = "moondeath"
+	player.character.ap = 41
+	player.alignment = 41
+	player.apCounter = 1
+	player.currentLevel = level
+	player.queueOutgoing = true
+	player.encryption.SetGen(ENCRYPT_GEN_1)
+	watcher := NewPlayer(nil, server)
+	c1, c2 := net.Pipe()
+	t.Cleanup(func() {
+		c1.Close()
+		c2.Close()
+	})
+	watcher.conn = c1
+	watcher.id = 2
+	watcher.playerType = PLTYPE_CLIENT3
+	watcher.accountName = "guest"
+	watcher.currentLevel = level
+	watcher.queueOutgoing = true
+	watcher.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[player.id] = player
+	server.players[watcher.id] = watcher
+	level.addPlayer(player)
+	level.addPlayer(watcher)
+
+	player.processAP()
+
+	if player.character.ap != 42 || player.alignment != 42 {
+		t.Fatalf("ap/alignment = %d/%d, want 42/42", player.character.ap, player.alignment)
+	}
+	if player.apCounter != 44 {
+		t.Fatalf("apCounter = %d, want 44", player.apCounter)
+	}
+	wantSelf := append([]byte{PLO_PLAYERPROPS + 32, PLPROP_ALIGNMENT + 32}, []byte{byte(42 + 32)}...)
+	if !bytes.Contains(player.outQueue, wantSelf) {
+		t.Fatalf("self alignment update missing: % X want % X", player.outQueue, wantSelf)
+	}
+	wantOther := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(player.id).Bytes()...)
+	wantOther = append(wantOther, PLPROP_ALIGNMENT+32, byte(42+32))
+	if !bytes.Contains(watcher.outQueue, wantOther) {
+		t.Fatalf("other alignment update missing: % X want % X", watcher.outQueue, wantOther)
+	}
+}
+
 func TestGS2CompilerHelperProcess(t *testing.T) {
 	if os.Getenv("GO_WANT_GS2_HELPER_PROCESS") != "1" {
 		return
@@ -1539,6 +1594,8 @@ func TestRCPlayerPropsSetUpdatesTargetFromLegacyPacket(t *testing.T) {
 	rc.adminRights = PLPERM_SETATTRIBUTES
 	rc.queueOutgoing = true
 	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	rc.id = 9
+	server.players[rc.id] = rc
 
 	target := NewPlayer(nil, server)
 	target.id = 7
@@ -1938,6 +1995,50 @@ func TestRCPlayerPropsGet3ParsesString8AccountName(t *testing.T) {
 	}
 }
 
+func TestRCPlayerPropsSet2LoadsOfflineAccount(t *testing.T) {
+	server := newLoginTestServer(t)
+	writeTestFile(t, server.config.GetBasePath(), "accounts/offline.txt", ""+
+		"GRACC001\n"+
+		"NICK offline\n"+
+		"BODY body.png\n")
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.accountName = "Admin"
+	rc.adminRights = PLPERM_SETATTRIBUTES
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	rc.id = 9
+	server.players[rc.id] = rc
+	packet := NewBuffer()
+	packet.WriteByte(PLI_RC_PLAYERPROPSSET2)
+	packet.WriteByte(byte(len("offline")))
+	packet.Write([]byte("offline"))
+	packet.WriteString8Encoded("main")
+	props := NewBuffer()
+	props.WriteGChar(PLPROP_NICKNAME)
+	props.WriteString8Encoded("offline2")
+	packet.WriteGChar(byte(props.Len()))
+	packet.Write(props.Bytes())
+	packet.WriteGShort(0)
+	packet.WriteGShort(0)
+	packet.WriteGChar(0)
+
+	if !rc.msgPLI_RC_PLAYERPROPSSET2(packet.Bytes()) {
+		t.Fatal("msgPLI_RC_PLAYERPROPSSET2 returned false")
+	}
+
+	data, err := server.config.LoadFile("accounts/offline.txt")
+	if err != nil {
+		t.Fatalf("load account: %v", err)
+	}
+	if !bytes.Contains(data, []byte("NICK offline2")) {
+		t.Fatalf("account was not saved with new nick:\n%s", data)
+	}
+	if !bytes.Contains(rc.outQueue, []byte("Admin set the attributes of player offline")) {
+		t.Fatalf("missing rc update message: %q", rc.outQueue)
+	}
+}
+
 func TestRCPlayerRightsGetNetworkPayloadUsesRawAccountAndGInt5Rights(t *testing.T) {
 	server := newLoginTestServer(t)
 	rc := NewPlayer(nil, server)
@@ -2236,6 +2337,41 @@ func TestRCPlayerRightsSetAllowsUnownedFoldersWithSetFolderRights(t *testing.T) 
 	}
 }
 
+func TestRCPlayerRightsSetSavesSelfWildcardFolderRights(t *testing.T) {
+	server := newLoginTestServer(t)
+	writeTestFile(t, server.config.GetBasePath(), "accounts/moondeath.txt", ""+
+		"GRACC001\n"+
+		"NICK moondeath\n"+
+		"LOCALRIGHTS 0\n")
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.accountName = "moondeath"
+	rc.adminRights = PLPERM_SETRIGHTS
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[2] = rc
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_RC_PLAYERRIGHTSSET)
+	packet.WriteString8Encoded("moondeath")
+	packet.WriteGInt5(uint64(PLPERM_SETRIGHTS))
+	packet.WriteString8Encoded("*.*.*.*")
+	folders := gtokenizeText("rw */*\nrw */*/*\nrw */*/*/*")
+	packet.WriteGShort(uint16(len(folders)))
+	packet.Write([]byte(folders))
+	if !rc.msgPLI_RC_PLAYERRIGHTSSET(packet.Bytes()) {
+		t.Fatal("msgPLI_RC_PLAYERRIGHTSSET returned false")
+	}
+
+	target := NewPlayer(nil, server)
+	if !target.LoadAccount("moondeath", false) {
+		t.Fatal("load target account failed")
+	}
+	if got := strings.Join(target.folderList, "\n"); got != "rw */*\nrw */*/*\nrw */*/*/*" {
+		t.Fatalf("saved folders = %q, want wildcard folder list", got)
+	}
+}
+
 func TestRCPlayerCommentsGetNetworkPayloadUsesRawComments(t *testing.T) {
 	server := newLoginTestServer(t)
 	writeTestFile(t, server.config.GetBasePath(), "accounts/Admin.txt", ""+
@@ -2396,6 +2532,40 @@ func TestRCChatOpenRightsDispatchesCommand(t *testing.T) {
 	if !bytes.Contains(rc.outQueue, want) {
 		t.Fatalf("openrights did not dispatch rights packet: % X, want prefix % X", rc.outQueue, want)
 	}
+	notice := append([]byte{PLO_RC_CHAT + 32}, []byte("Admin has opened the rights of moondeath")...)
+	if !bytes.Contains(rc.outQueue, notice) {
+		t.Fatalf("openrights did not announce rights open: % X", rc.outQueue)
+	}
+}
+
+func TestRCChatOpenCommandsDefaultToOwnAccount(t *testing.T) {
+	server := newLoginTestServer(t)
+	writeTestFile(t, server.config.GetBasePath(), "accounts/Admin.txt", "GRACC001\nNICK Admin\nLOCALRIGHTS 1\n")
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.id = 2
+	rc.accountName = "Admin"
+	rc.adminRights = PLPERM_VIEWATTRIBUTES
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[rc.id] = rc
+
+	rc.msgPLI_RC_CHAT(append([]byte{PLI_RC_CHAT}, []byte("/open")...))
+	if !bytes.Contains(rc.outQueue, []byte{PLO_RC_PLAYERPROPSGET + 32}) {
+		t.Fatalf("open without account did not open own attributes: % X", rc.outQueue)
+	}
+	if !bytes.Contains(rc.outQueue, append([]byte{PLO_RC_CHAT + 32}, []byte("Admin has opened the attributes of Admin")...)) {
+		t.Fatalf("open without account did not announce own attributes: % X", rc.outQueue)
+	}
+
+	rc.outQueue = nil
+	rc.msgPLI_RC_CHAT(append([]byte{PLI_RC_CHAT}, []byte("/openrights")...))
+	if !bytes.Contains(rc.outQueue, []byte{PLO_RC_PLAYERRIGHTSGET + 32}) {
+		t.Fatalf("openrights without account did not open own rights: % X", rc.outQueue)
+	}
+	if !bytes.Contains(rc.outQueue, append([]byte{PLO_RC_CHAT + 32}, []byte("Admin has opened the rights of Admin")...)) {
+		t.Fatalf("openrights without account did not announce own rights: % X", rc.outQueue)
+	}
 }
 
 func TestScriptHelpWildcardRegexMatchesPlainPrefixesAndWildcards(t *testing.T) {
@@ -2412,6 +2582,18 @@ func TestScriptHelpWildcardRegexMatchesPlainPrefixesAndWildcards(t *testing.T) {
 	}
 	if !wild.MatchString("disableweapons") || wild.MatchString("disablepause") {
 		t.Fatalf("wildcard scripthelp regex mismatch")
+	}
+}
+
+func TestScriptHelpLineDropsScopeOnlyDescriptions(t *testing.T) {
+	entries := []ScriptHelpEntry{
+		{Name: "disableactionprojectile2", Scope: "clientside", Description: "Clientside:"},
+		{Name: "disableapnoheal", Scope: "clientside", Description: "No matching script function found!"},
+	}
+	for _, entry := range entries {
+		if got := entry.scriptHelpLine(); strings.Contains(got, "Clientside:") || strings.Contains(got, "No matching") {
+			t.Fatalf("scriptHelpLine(%q) = %q", entry.Name, got)
+		}
 	}
 }
 
@@ -2622,6 +2804,32 @@ func TestRCFileBrowserRootListsFilesAndFolders(t *testing.T) {
 	}
 	if !bytes.Contains(rc.outQueue, []byte("levels/")) {
 		t.Fatalf("root file browser output missing child folder: % X", rc.outQueue)
+	}
+}
+
+func TestRCFileBrowserWildcardFolderRightsExpandRealFolders(t *testing.T) {
+	server := newLoginTestServer(t)
+	writeTestFile(t, server.config.GetBasePath(), "world/levels/onlinestartlocal.nw", "level")
+	rc := newRCFileBrowserTestPlayer(server)
+	rc.folderList = []string{"rw */*", "rw */*/*", "rw */*/*/*"}
+	rc.lastFolder = ""
+
+	rc.msgPLI_RC_FILEBROWSER_START([]byte{PLI_RC_FILEBROWSER_START})
+
+	dirListEnd := bytes.IndexByte(rc.outQueue, '\n')
+	if dirListEnd < 0 {
+		t.Fatalf("dirlist packet missing terminator: % X", rc.outQueue)
+	}
+	if bytes.Contains(rc.outQueue[:dirListEnd], []byte("*/")) {
+		t.Fatalf("file browser output exposed wildcard as folder: % X", rc.outQueue)
+	}
+	if !bytes.Contains(rc.outQueue, []byte("levels/")) {
+		t.Fatalf("file browser output missing real levels folder: % X", rc.outQueue)
+	}
+	rc.outQueue = rc.outQueue[:0]
+	rc.msgPLI_RC_FILEBROWSER_CD(append([]byte{PLI_RC_FILEBROWSER_CD}, []byte("levels/")...))
+	if !bytes.Contains(rc.outQueue, []byte("onlinestartlocal.nw")) {
+		t.Fatalf("file browser output missing level file through wildcard rights: % X", rc.outQueue)
 	}
 }
 
@@ -3758,17 +3966,38 @@ func TestGuestLoadUsesPCAccountName(t *testing.T) {
 		"Y 4\n")
 	p := NewPlayer(nil, server)
 	p.setServer(server)
+	p.deviceId = 6259711
 	if !p.LoadAccount("guest", true) {
 		t.Fatal("LoadAccount guest returned false")
 	}
 	if !p.isGuest || !p.isLoadOnly {
 		t.Fatalf("guest flags = isGuest:%v isLoadOnly:%v, want true/true", p.isGuest, p.isLoadOnly)
 	}
-	if !strings.HasPrefix(p.accountName, "pc:") {
-		t.Fatalf("guest accountName = %q, want pc:*", p.accountName)
+	if p.accountName != "pc:6259711" {
+		t.Fatalf("guest accountName = %q, want pc:6259711", p.accountName)
 	}
 	if p.communityName != "guest" {
 		t.Fatalf("communityName = %q, want guest", p.communityName)
+	}
+}
+
+func TestGuestLoginUsesNumericIdentityAsPCID(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.serverLists = nil
+	server.serverList = nil
+	writeTestFile(t, server.config.GetBasePath(), "accounts/defaultaccount.txt", ""+
+		"GRACC001\n"+
+		"NICK guest\n"+
+		"LEVEL onlinestartlocal.nw\n"+
+		"X 4\n"+
+		"Y 4\n")
+	p := NewPlayer(nil, server)
+
+	if !p.handleLogin(buildLoginPacket(t, 5, 0, "G3D03014", "guest", "", "6259711")) {
+		t.Fatal("handleLogin returned false")
+	}
+	if p.deviceId != 6259711 || p.accountName != "pc:6259711" || p.communityName != "guest" {
+		t.Fatalf("guest PCID state = device:%d account:%q community:%q", p.deviceId, p.accountName, p.communityName)
 	}
 }
 
@@ -6757,6 +6986,49 @@ func TestSendWeaponUsesNpcWeaponPropertyStream(t *testing.T) {
 	}
 }
 
+func TestSendWeaponFormatsClientsideScriptFromMarker(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	p := &Player{
+		conn:       serverConn,
+		server:     &Server{logger: NewLogger("", false)},
+		encryption: *NewEncryption(),
+	}
+	p.encryption.SetGen(ENCRYPT_GEN_1)
+
+	weapon := &Weapon{name: "-gr_movement", image: "wbomb1.png", script: "\n//#CLIENTSIDE\n  function onCreated() {\n    chat = \"ok\";\n  }\n"}
+	done := make(chan struct{}, 1)
+	go func() {
+		p.sendWeapon(weapon)
+		done <- struct{}{}
+	}()
+
+	script := "//#CLIENTSIDE\xa7function onCreated() {\xa7chat = \"ok\";\xa7}\xa7\xa7"
+	scriptLen := NewBuffer()
+	scriptLen.WriteGShort(uint16(len(script)))
+	want := []byte{PLO_NPCWEAPONADD + 32, byte(len(weapon.name)) + 32}
+	want = append(want, []byte(weapon.name)...)
+	want = append(want, NPCPROP_IMAGE+32, byte(len(weapon.image))+32)
+	want = append(want, []byte(weapon.image)...)
+	want = append(want, NPCPROP_SCRIPT+32)
+	want = append(want, scriptLen.Bytes()...)
+	want = append(want, []byte(script)...)
+	want = append(want, '\n')
+
+	clientConn.SetReadDeadline(time.Now().Add(time.Second))
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(clientConn, got); err != nil {
+		t.Fatalf("read weapon packet: %v", err)
+	}
+	<-done
+
+	if string(got) != string(want) {
+		t.Fatalf("weapon packet = % X, want % X", got, want)
+	}
+}
+
 func TestSendAccountWeaponUsesDefaultWeaponPacketForBombAndBow(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
@@ -7295,7 +7567,7 @@ func TestUpdateFileDefaultClientAssetReturnsUpToDate(t *testing.T) {
 	}
 }
 
-func TestWantFileDefaultClientAssetReturnsUpToDate(t *testing.T) {
+func TestWantFileDefaultClientAssetUsesHardFileRequest(t *testing.T) {
 	serverConn, clientConn := net.Pipe()
 	defer serverConn.Close()
 	defer clientConn.Close()
@@ -7321,12 +7593,46 @@ func TestWantFileDefaultClientAssetReturnsUpToDate(t *testing.T) {
 	clientConn.SetReadDeadline(time.Now().Add(time.Second))
 	got := make([]byte, len(want))
 	if _, err := io.ReadFull(clientConn, got); err != nil {
-		t.Fatalf("read default wantfile response: %v", err)
+		t.Fatalf("read default hard wantfile response: %v", err)
 	}
 	<-done
 
 	if string(got) != string(want) {
-		t.Fatalf("default wantfile response = % X, want % X", got, want)
+		t.Fatalf("default hard wantfile response = % X, want % X", got, want)
+	}
+}
+
+func TestWantFileMissingUpdatePackageStaysUpToDate(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	fileName := "basepackage.gupd"
+	p := &Player{
+		conn:       serverConn,
+		server:     &Server{logger: NewLogger("", false), config: NewFileSystem(t.TempDir())},
+		encryption: *NewEncryption(),
+	}
+	p.encryption.SetGen(ENCRYPT_GEN_1)
+
+	want := append([]byte{PLO_FILEUPTODATE + 32}, []byte(fileName)...)
+	want = append(want, '\n')
+
+	done := make(chan struct{}, 1)
+	go func() {
+		p.msgPLI_WANTFILE(append([]byte{PLI_WANTFILE}, []byte(fileName)...))
+		done <- struct{}{}
+	}()
+
+	clientConn.SetReadDeadline(time.Now().Add(time.Second))
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(clientConn, got); err != nil {
+		t.Fatalf("read update package wantfile response: %v", err)
+	}
+	<-done
+
+	if string(got) != string(want) {
+		t.Fatalf("update package wantfile response = % X, want % X", got, want)
 	}
 }
 

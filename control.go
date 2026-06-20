@@ -588,6 +588,7 @@ func (p *Player) msgPLI_RC_PLAYERPROPSGET2(packet []byte) bool {
 	buf2.WriteGShort(targetPlayer.id)
 	buf2.Write(targetPlayer.getPropsRC())
 	p.send(buf2)
+	p.server.sendRCChat(p.accountName + " has opened the attributes of " + targetPlayer.accountName)
 	return true
 }
 func (p *Player) msgPLI_RC_PLAYERPROPSGET3(packet []byte) bool {
@@ -616,6 +617,7 @@ func (p *Player) msgPLI_RC_PLAYERPROPSGET3(packet []byte) bool {
 	buf2.WriteGShort(targetPlayer.id)
 	buf2.Write(targetPlayer.getPropsRC())
 	p.send(buf2)
+	p.server.sendRCChat(p.accountName + " has opened the attributes of " + accountName)
 	return true
 }
 func (p *Player) msgPLI_RC_PLAYERPROPSRESET(packet []byte) bool {
@@ -669,7 +671,10 @@ func (p *Player) msgPLI_RC_PLAYERPROPSSET2(packet []byte) bool {
 		if !p.server.accountExists(accountName) {
 			return true
 		}
-		return true
+		targetPlayer = NewPlayer(nil, p.server)
+		if !targetPlayer.LoadAccount(accountName, false) {
+			return true
+		}
 	}
 	if (targetPlayer.accountName != p.accountName && !p.hasRight(PLPERM_SETATTRIBUTES)) ||
 		(targetPlayer.accountName == p.accountName && !p.hasRight(PLPERM_SETSELFATTRIBUTES)) {
@@ -814,26 +819,44 @@ func (p *Player) handleRCCommand(message string) bool {
 	case "/scripthelp":
 		p.sendScriptHelp(arg)
 	case "/open":
+		if arg == "" {
+			arg = p.accountName
+		}
 		if arg != "" {
 			return p.msgPLI_RC_PLAYERPROPSGET3(rcCommandAccountPacket(arg))
 		}
 	case "/openacc":
+		if arg == "" {
+			arg = p.accountName
+		}
 		if arg != "" {
 			return p.msgPLI_RC_ACCOUNTGET(rcCommandAccountPacket(arg))
 		}
 	case "/opencomments":
+		if arg == "" {
+			arg = p.accountName
+		}
 		if arg != "" {
 			return p.msgPLI_RC_PLAYERCOMMENTSGET(rcCommandAccountPacket(arg))
 		}
 	case "/openban":
+		if arg == "" {
+			arg = p.accountName
+		}
 		if arg != "" {
 			return p.msgPLI_RC_PLAYERBANGET(rcCommandAccountPacket(arg))
 		}
 	case "/openrights":
+		if arg == "" {
+			arg = p.accountName
+		}
 		if arg != "" {
 			return p.msgPLI_RC_PLAYERRIGHTSGET(rcCommandAccountPacket(arg))
 		}
 	case "/reset":
+		if arg == "" {
+			arg = p.accountName
+		}
 		if arg != "" {
 			return p.msgPLI_RC_PLAYERPROPSRESET(rcCommandAccountPacket(arg))
 		}
@@ -1004,7 +1027,7 @@ func (e ScriptHelpEntry) scriptHelpLine() string {
 		line += "(" + strings.Join(e.Params, ", ") + ")"
 	}
 	returns := strings.TrimSpace(e.Returns)
-	desc := strings.TrimSpace(e.Description)
+	desc := cleanScriptHelpDescription(e.Description)
 	if returns != "" && !strings.EqualFold(returns, "void") {
 		line += " - returns " + returns
 	}
@@ -1015,6 +1038,15 @@ func (e ScriptHelpEntry) scriptHelpLine() string {
 		line += " - " + desc
 	}
 	return line
+}
+
+func cleanScriptHelpDescription(desc string) string {
+	desc = strings.TrimSpace(desc)
+	switch strings.ToLower(desc) {
+	case "", "clientside:", "serverside:", "no matching script function found!":
+		return ""
+	}
+	return desc
 }
 
 func (p *Player) sendRCHelp() {
@@ -1107,6 +1139,7 @@ func (p *Player) msgPLI_RC_PLAYERRIGHTSGET(packet []byte) bool {
 	buf2.WriteGShort(uint16(len(folders)))
 	buf2.Write([]byte(folders))
 	p.send(buf2)
+	p.server.sendRCChat(p.accountName + " has opened the rights of " + accountName)
 	return true
 }
 func (p *Player) msgPLI_RC_PLAYERRIGHTSSET(packet []byte) bool {
@@ -1166,7 +1199,7 @@ func (p *Player) msgPLI_RC_PLAYERRIGHTSSET(packet []byte) bool {
 		if strings.Contains(folder, ":") || strings.Contains(folder, "..") || strings.Contains(folder, " /*") {
 			continue
 		}
-		if !p.hasRight(PLPERM_SETFOLDERRIGHTS) && !p.canGrantFolderRight(folder) {
+		if !p.hasRight(PLPERM_SETFOLDERRIGHTS) && accountName != p.accountName && !p.canGrantFolderRight(folder) {
 			continue
 		}
 		if folder != "" {
@@ -1258,6 +1291,7 @@ func (p *Player) msgPLI_RC_PLAYERCOMMENTSGET(packet []byte) bool {
 	writeRCEncodedString(buf2, accountName)
 	buf2.Write([]byte(targetPlayer.accountComments))
 	p.send(buf2)
+	p.server.sendRCChat(p.accountName + " has opened the comments of " + accountName)
 	return true
 }
 func (p *Player) msgPLI_RC_PLAYERCOMMENTSSET(packet []byte) bool {
@@ -1384,10 +1418,8 @@ func (p *Player) msgPLI_RC_FILEBROWSER_START(packet []byte) bool {
 			return true
 		}
 	}
-	var folders string
-	for _, folder := range p.folderList {
-		folders += folder + "\n"
-	}
+	folderMap := p.rcFolderMap()
+	folders := p.rcFileBrowserFolderList(folderMap)
 	buf := NewBuffer()
 	buf.WriteByte(PLO_RC_FILEBROWSER_DIRLIST)
 	buf.Write([]byte(gtokenizeText(folders)))
@@ -1398,7 +1430,6 @@ func (p *Player) msgPLI_RC_FILEBROWSER_START(packet []byte) bool {
 		buf2.Write([]byte("Welcome to the File Browser."))
 		p.send(buf2)
 	}
-	folderMap := p.rcFolderMap()
 	if _, exists := folderMap[p.lastFolder]; !exists {
 		for folder := range folderMap {
 			p.lastFolder = folder
@@ -1438,9 +1469,65 @@ func (p *Player) rcFolderMap() map[string]string {
 				folderPath = ""
 			}
 		}
-		folderMap[folderPath] += rights + ":" + wild + "\n"
+		for _, realFolder := range p.expandRCFolderPath(folderPath) {
+			folderMap[realFolder] += rights + ":" + wild + "\n"
+		}
 	}
 	return folderMap
+}
+
+func (p *Player) rcFileBrowserFolderList(folderMap map[string]string) string {
+	var folders []string
+	seen := make(map[string]bool)
+	for folder, entries := range folderMap {
+		for _, entry := range strings.Split(entries, "\n") {
+			if entry == "" {
+				continue
+			}
+			parts := strings.SplitN(entry, ":", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			line := parts[0] + " " + folder + parts[1]
+			if !seen[line] {
+				folders = append(folders, line)
+				seen[line] = true
+			}
+		}
+	}
+	sort.Strings(folders)
+	return strings.Join(folders, "\n")
+}
+
+func (p *Player) expandRCFolderPath(folderPath string) []string {
+	folderPath = filepath.ToSlash(strings.TrimSpace(folderPath))
+	if folderPath == "" {
+		return []string{""}
+	}
+	if !strings.ContainsAny(folderPath, "*?") {
+		return []string{folderPath}
+	}
+	parts := strings.Split(strings.TrimSuffix(folderPath, "/"), "/")
+	var out []string
+	var walk func(string, int)
+	walk = func(prefix string, idx int) {
+		if idx >= len(parts) {
+			out = append(out, prefix)
+			return
+		}
+		dirs, err := p.server.config.ListDirs(prefix)
+		if err != nil {
+			return
+		}
+		for _, dir := range dirs {
+			matched, err := filepath.Match(parts[idx], dir)
+			if err == nil && matched {
+				walk(prefix+dir+"/", idx+1)
+			}
+		}
+	}
+	walk("", 0)
+	return out
 }
 
 func (p *Player) sendRCFileBrowserDir(folderMap map[string]string) {
