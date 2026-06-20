@@ -314,7 +314,7 @@ func (p *Player) msgPLI_RC_DISCONNECTPLAYER(packet []byte) bool {
 	p.server.sendRCChat(p.accountName + " disconnected " + targetPlayer.accountName)
 	targetPlayer.sendPacket([]byte{PLO_DISCMESSAGE, 0})
 	targetPlayer.writeString8(disconnectMessage)
-	p.server.removePlayer(targetPlayer)
+	targetPlayer.disconnect()
 	return true
 }
 func (p *Player) msgPLI_RC_UPDATELEVELS(packet []byte) bool {

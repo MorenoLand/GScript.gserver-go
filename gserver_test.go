@@ -3698,6 +3698,33 @@ func TestDeletePlayerBroadcastsDelPlayerToRC(t *testing.T) {
 	}
 }
 
+func TestRCDisconnectPlayerClosesTargetConnection(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer clientConn.Close()
+	server := &Server{logger: NewLogger("", false), players: make(map[uint16]*Player)}
+	target := &Player{id: 3, conn: serverConn, server: server, playerType: PLTYPE_CLIENT3, loaded: true}
+	target.accountName = "moondeath"
+	rc := &Player{id: 4, server: server, playerType: PLTYPE_RC2}
+	rc.accountName = "admin"
+	rc.adminRights = PLPERM_DISCONNECT
+	server.players[target.id] = target
+	server.players[rc.id] = rc
+	packet := NewBuffer().WriteByte(PLI_RC_DISCONNECTPLAYER).WriteGShort(target.id).Bytes()
+	if !rc.msgPLI_RC_DISCONNECTPLAYER(packet) {
+		t.Fatal("msgPLI_RC_DISCONNECTPLAYER returned false")
+	}
+	if server.GetPlayer(target.id) != nil {
+		t.Fatal("target stayed in server player map")
+	}
+	_ = clientConn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	buf := make([]byte, 128)
+	for {
+		if _, err := clientConn.Read(buf); err != nil {
+			return
+		}
+	}
+}
+
 func TestPlayerWriteFailureDisconnectsAndBroadcastsDelPlayer(t *testing.T) {
 	deadServer, deadClient := net.Pipe()
 	deadClient.Close()
