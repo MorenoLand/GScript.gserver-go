@@ -367,25 +367,12 @@ func (p *Player) sendPlayerPropChanges(propIds ...int) {
 	}
 	selfProps := append(append([]byte(nil), common.Bytes()...), selfMove...)
 	if len(selfProps) > 0 {
+		if p.server != nil && p.server.logger != nil {
+			p.server.logger.Debug("PLAYERCHAT source props queueOutgoing=%v bytes=% X", p.queueOutgoing, append([]byte{PLO_PLAYERPROPS}, selfProps...))
+		}
 		p.sendPacket(append([]byte{PLO_PLAYERPROPS}, selfProps...))
 	}
-	p.sendOwnOtherPlayerPropDeltas(common.Bytes(), legacy.Bytes(), precise.Bytes())
 	p.sendPlayerPropDeltasToCurrentLevel(common.Bytes(), legacy.Bytes(), precise.Bytes())
-}
-
-func (p *Player) sendOwnOtherPlayerPropDeltas(common, legacyMove, preciseMove []byte) {
-	moveProps := legacyMove
-	if playerSupportsPreciseMovement(p) {
-		moveProps = preciseMove
-	}
-	if len(common) == 0 && len(moveProps) == 0 {
-		return
-	}
-	out := NewBuffer()
-	out.WriteByte(PLO_OTHERPLPROPS).WriteGShort(p.id)
-	out.Write(common)
-	out.Write(moveProps)
-	p.sendPacket(append(out.Bytes(), '\n'))
 }
 
 func graalColor(name string) (byte, bool) {
