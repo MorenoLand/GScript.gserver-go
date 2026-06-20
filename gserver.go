@@ -2124,6 +2124,28 @@ func accountIPFromAddr(addr net.Addr) uint {
 	return uint(ip4[0])<<24 | uint(ip4[1])<<16 | uint(ip4[2])<<8 | uint(ip4[3])
 }
 
+func ipStringFromAddr(addr net.Addr) string {
+	if addr == nil {
+		return ""
+	}
+	var ip net.IP
+	if tcpAddr, ok := addr.(*net.TCPAddr); ok {
+		ip = tcpAddr.IP
+	} else {
+		host, _, err := net.SplitHostPort(addr.String())
+		if err == nil {
+			ip = net.ParseIP(host)
+		} else {
+			ip = net.ParseIP(addr.String())
+		}
+	}
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return ""
+	}
+	return ip4.String()
+}
+
 func (p *Player) setAccountIPFromRemoteAddr(addr net.Addr) {
 	ip := accountIPFromAddr(addr)
 	if ip == 0 {
@@ -2575,6 +2597,10 @@ func (p *Player) handlePacket(packet []byte) bool {
 		p.server.logger.PacketDebug("[PACKET] Ignoring NC-only %s (ID %d, %d bytes) from %s", packetName, packetId, len(packet), p.accountName)
 		return true
 	}
+	if ((isRCOnlyPacket(packetId) && p.playerType&PLTYPE_ANYRC != 0) || (isNCOnlyPacket(packetId) && p.playerType&PLTYPE_ANYNC != 0)) && !p.canLoginControl() {
+		p.server.logger.Warning("[Hack] %s attempted control packet %s without matching staff/IP rights", p.accountName, packetName)
+		return false
+	}
 	p.server.logger.Debug("[PACKET] Received %s (ID %d, %d bytes) from %s", packetName, packetId, len(packet), p.accountName)
 	switch packetId {
 	case PLI_LEVELWARP, PLI_LEVELWARPMOD:
@@ -3013,6 +3039,13 @@ func (p *Player) handleLogin(packet []byte) bool {
 		p.server.logger.Info("Creating new account from default: %s", account)
 		p.SaveAccount()
 	}
+	if clientType&PLTYPE_ANYCONTROL != 0 && !p.canLoginControl() {
+		p.server.logger.Warning("[Disconnect] %s attempted RC/NC login without rights or matching IP", account)
+		buf := NewBuffer()
+		buf.WriteByte(PLO_DISCMESSAGE).Write([]byte("You do not have RC rights."))
+		p.send(buf)
+		return false
+	}
 	if clientType&PLTYPE_ANYRC != 0 {
 		p.levelName = ""
 		p.currentLevel = nil
@@ -3401,6 +3434,42 @@ func (p *Player) disconnect() {
 	}
 }
 func (p *Player) hasRight(perm int) bool { return p.adminRights&perm != 0 }
+
+func (p *Player) canLoginControl() bool {
+	if p.server == nil || p.server.settings == nil || !serverOptionsStaffContains(p.server.settings.Get("staff"), p.accountName) {
+		return false
+	}
+	return p.adminIPMatchesRemote()
+}
+
+func (p *Player) adminIPMatchesRemote() bool {
+	remoteIP := ""
+	if p.conn != nil {
+		remoteIP = ipStringFromAddr(p.conn.RemoteAddr())
+	}
+	if remoteIP == "" && p.accountIp != 0 {
+		remoteIP = fmt.Sprintf("%d.%d.%d.%d", byte(p.accountIp>>24), byte(p.accountIp>>16), byte(p.accountIp>>8), byte(p.accountIp))
+	}
+	if remoteIP == "" {
+		return false
+	}
+	for _, mask := range strings.Split(p.adminIp, ",") {
+		mask = strings.TrimSpace(mask)
+		if mask == "" {
+			continue
+		}
+		if mask == "0.0.0.0" || mask == "*.*.*.*" {
+			return true
+		}
+		if strings.EqualFold(mask, remoteIP) {
+			return true
+		}
+		if matched, err := filepath.Match(mask, remoteIP); err == nil && matched {
+			return true
+		}
+	}
+	return false
+}
 
 func (p *Player) applyServerOptionsStaffRights() {
 	if p.server == nil || p.server.settings == nil || !serverOptionsStaffContains(p.server.settings.Get("staff"), p.accountName) {
@@ -8013,7 +8082,7 @@ func (sl *ServerList) sendPlayers() {
 	if !sl.connected {
 		return
 	}
-	sl.server.syncNPCServer()
+	sl.server.syncNPCServerQuiet()
 	buf := NewBuffer()
 	buf.WriteGChar(SVO_SETPLYR)
 	sl.sendPacket(buf.Bytes())

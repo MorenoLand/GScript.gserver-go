@@ -45,11 +45,23 @@ func (s *Server) syncNPCServer() {
 	s.ensureNPCServer().Sync()
 }
 
+func (s *Server) syncNPCServerQuiet() {
+	s.ensureNPCServer().SyncQuiet()
+}
+
 func (n *NPCServer) Enabled() bool {
 	return n != nil && n.host != nil && n.host.settings != nil && n.host.settings.GetBool("serverside", false)
 }
 
 func (n *NPCServer) Sync() {
+	n.sync(true)
+}
+
+func (n *NPCServer) SyncQuiet() {
+	n.sync(false)
+}
+
+func (n *NPCServer) sync(announce bool) {
 	if n == nil || n.host == nil {
 		return
 	}
@@ -59,7 +71,11 @@ func (n *NPCServer) Sync() {
 			oldHead := player.character.headImage
 			n.applyPlayerSettings(player)
 			if oldNick != player.character.nickName || oldHead != player.character.headImage {
-				n.host.refreshPlayerListEntry(player)
+				if announce {
+					n.host.refreshPlayerListEntry(player)
+				} else {
+					n.host.broadcastPlayerListEntryToClients(player)
+				}
 			}
 		} else {
 			n.Start()

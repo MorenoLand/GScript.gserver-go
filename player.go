@@ -262,7 +262,7 @@ func isDefaultPlayerAsset(category, fileName string) bool {
 
 func (p *Player) handlePlayerChatWarpto(words []string) bool {
 	if len(words) == 2 {
-		if !p.hasRight(PLPERM_WARPTOPLAYER) && !p.server.allowsWarpToAll() {
+		if (!p.hasRight(PLPERM_WARPTOPLAYER) || !p.adminIPMatchesRemote()) && !p.server.allowsWarpToAll() {
 			p.server.logger.Debug("PLAYERCHAT warpto player denied for %s rights=%d warptoforall=%v", p.accountName, p.adminRights, p.server.allowsWarpToAll())
 			p.setChat("(not authorized to warp)")
 			return true
@@ -279,7 +279,7 @@ func (p *Player) handlePlayerChatWarpto(words []string) bool {
 		return true
 	}
 	if len(words) == 3 || len(words) == 4 {
-		if !p.hasRight(PLPERM_WARPTO) && !p.server.allowsWarpToAll() {
+		if (!p.hasRight(PLPERM_WARPTO) || !p.adminIPMatchesRemote()) && !p.server.allowsWarpToAll() {
 			p.server.logger.Debug("PLAYERCHAT warpto xy denied for %s rights=%d warptoforall=%v", p.accountName, p.adminRights, p.server.allowsWarpToAll())
 			p.setChat("(not authorized to warp)")
 			return true

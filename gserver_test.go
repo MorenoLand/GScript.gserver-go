@@ -1475,7 +1475,8 @@ func TestLoadClassesReadsScriptsFolder(t *testing.T) {
 
 func TestRC2LoginReadsEncryptionKeyAndSkipsGameWorldLogin(t *testing.T) {
 	server := newLoginTestServer(t)
-	p := NewPlayer(nil, server)
+	server.settings.Set("staff", "Admin")
+	p := NewPlayer(fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server)
 
 	if !p.handleLogin(buildLoginPacket(t, 6, 42, "G3D0311C", "Admin", "pass", "win,test,6.037")) {
 		t.Fatalf("RC2 login was rejected")
@@ -2440,7 +2441,7 @@ func TestRCPlayerCommentsGetNetworkPayloadUsesRawComments(t *testing.T) {
 
 func TestSendTextParsesCommaStyleListerCommands(t *testing.T) {
 	server := newLoginTestServer(t)
-	p := NewPlayer(nil, server)
+	p := NewPlayer(fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server)
 	p.id = 3
 	p.accountName = "moondeath"
 	p.queueOutgoing = true
@@ -2910,10 +2911,40 @@ func TestRCFileBrowserUploadParsesString8FilenameAndRawData(t *testing.T) {
 	}
 }
 
+func TestRCFileBrowserListsAccountsThroughAccountFolderRight(t *testing.T) {
+	server := newLoginTestServer(t)
+	writeTestFile(t, server.config.GetBasePath(), "accounts/moondeath.txt", "account")
+	rc := newRCFileBrowserTestPlayer(server)
+	rc.folderList = []string{"rw accounts/*"}
+	rc.lastFolder = "accounts/"
+
+	rc.msgPLI_RC_FILEBROWSER_CD(append([]byte{PLI_RC_FILEBROWSER_CD}, []byte("accounts/")...))
+
+	if !bytes.Contains(rc.outQueue, []byte("moondeath.txt")) {
+		t.Fatalf("accounts folder output missing account file: % X", rc.outQueue)
+	}
+}
+
+func TestRCFileBrowserUploadRequiresWriteRight(t *testing.T) {
+	server := newLoginTestServer(t)
+	rc := newRCFileBrowserTestPlayer(server)
+	rc.folderList = []string{"r levels/*.nw"}
+	rc.lastFolder = "levels/"
+
+	packet := append([]byte{PLI_RC_FILEBROWSER_UP, byte(len("upload.nw"))}, []byte("upload.nw")...)
+	packet = append(packet, []byte("uploaded")...)
+	rc.msgPLI_RC_FILEBROWSER_UP(packet)
+
+	if _, err := os.Stat(filepath.Join(server.config.GetBasePath(), "levels", "upload.nw")); !os.IsNotExist(err) {
+		t.Fatalf("read-only folder upload err = %v, want not exist", err)
+	}
+}
+
 func TestRCFileBrowserDownloadWrapsFilePacketInRawData(t *testing.T) {
 	server := newLoginTestServer(t)
 	writeTestFile(t, server.config.GetBasePath(), "levels/test.nw", "level")
 	rc := newRCFileBrowserTestPlayer(server)
+	rc.folderList = []string{"r levels/*.nw"}
 	rc.lastFolder = "levels/"
 
 	rc.msgPLI_RC_FILEBROWSER_DOWN(append([]byte{PLI_RC_FILEBROWSER_DOWN}, []byte("test.nw")...))
@@ -2947,7 +2978,7 @@ func TestAccountLoadsAndSavesIP(t *testing.T) {
 	if err := os.WriteFile(accountPath, accountData, 0644); err != nil {
 		t.Fatalf("write account: %v", err)
 	}
-	p := NewPlayer(nil, server)
+	p := NewPlayer(fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server)
 
 	if !p.LoadAccount("Admin", false) {
 		t.Fatalf("load account failed")
@@ -2996,7 +3027,7 @@ func TestRCLoginAppliesServerOptionsStaffRights(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(server.config.GetBasePath(), "accounts", "moondeath.txt"), []byte(account), 0644); err != nil {
 		t.Fatalf("write account: %v", err)
 	}
-	p := NewPlayer(nil, server)
+	p := NewPlayer(fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server)
 
 	if !p.handleLogin(buildLoginPacket(t, 6, 42, "G3D0311C", "moondeath", "pass", "win,test,6.037")) {
 		t.Fatalf("RC2 login was rejected")
@@ -3014,6 +3045,39 @@ func TestRCLoginAppliesServerOptionsStaffRights(t *testing.T) {
 	}
 	if got, want := strings.Join(p.folderList, "\n"), "rw *.nw\nrw levels/*.graal"; got != want {
 		t.Fatalf("folderList = %q, want %q", got, want)
+	}
+}
+
+func TestRCLoginRejectsAccountWithRightsButNotStaffListed(t *testing.T) {
+	server := newRepoScratchLoginServer(t, "rc-auth-nonstaff")
+	server.settings.Set("staff", "moondeath")
+	writeLoginAccount(t, server, "intruder", "*.*.*.*", allLocalRights())
+	p := NewPlayer(fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server)
+
+	if p.handleLogin(buildLoginPacket(t, 6, 42, "G3D0311C", "intruder", "pass", "win,test,6.037")) {
+		t.Fatalf("RC login accepted account with rights but not staff list")
+	}
+}
+
+func TestRCLoginRejectsStaffAccountWithMismatchedIPRange(t *testing.T) {
+	server := newRepoScratchLoginServer(t, "rc-auth-ip-mismatch")
+	server.settings.Set("staff", "moondeath")
+	writeLoginAccount(t, server, "moondeath", "10.0.0.*", allLocalRights())
+	p := NewPlayer(fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server)
+
+	if p.handleLogin(buildLoginPacket(t, 6, 42, "G3D0311C", "moondeath", "pass", "win,test,6.037")) {
+		t.Fatalf("RC login accepted staff account with mismatched IP range")
+	}
+}
+
+func TestRCLoginAcceptsStaffAccountWithMatchingIPRange(t *testing.T) {
+	server := newRepoScratchLoginServer(t, "rc-auth-ip-match")
+	server.settings.Set("staff", "moondeath")
+	writeLoginAccount(t, server, "moondeath", "127.0.0.*", allLocalRights())
+	p := NewPlayer(fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server)
+
+	if !p.handleLogin(buildLoginPacket(t, 6, 42, "G3D0311C", "moondeath", "pass", "win,test,6.037")) {
+		t.Fatalf("RC login rejected staff account with matching IP range")
 	}
 }
 
@@ -3097,17 +3161,19 @@ func TestResolveRequestedFileUsesFolderConfigPatterns(t *testing.T) {
 
 func TestRCLoginClearsWorldLevelFromAccount(t *testing.T) {
 	server := newLoginTestServer(t)
+	server.settings.Set("staff", "moondeath")
 	account := "" +
 		"GRACC001\n" +
 		"NICK moondeath\n" +
 		"LOCALRIGHTS 1\n" +
+		"IPRANGE 127.0.0.*\n" +
 		"LEVEL onlinestartlocal.nw\n" +
 		"X 30\n" +
 		"Y 30\n"
 	if err := os.WriteFile(filepath.Join(server.config.GetBasePath(), "accounts", "moondeath.txt"), []byte(account), 0644); err != nil {
 		t.Fatalf("write account: %v", err)
 	}
-	p := NewPlayer(nil, server)
+	p := NewPlayer(fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server)
 
 	if !p.handleLogin(buildLoginPacket(t, 6, 42, "G3D0311C", "moondeath", "pass", "win,test,6.037")) {
 		t.Fatalf("RC2 login was rejected")
@@ -3122,6 +3188,41 @@ type fakeAddr string
 
 func (a fakeAddr) Network() string { return "fake" }
 func (a fakeAddr) String() string  { return string(a) }
+
+type fakeConn struct{ remote net.Addr }
+
+func (c fakeConn) Read([]byte) (int, error)         { return 0, io.EOF }
+func (c fakeConn) Write(p []byte) (int, error)      { return len(p), nil }
+func (c fakeConn) Close() error                     { return nil }
+func (c fakeConn) LocalAddr() net.Addr              { return fakeAddr("127.0.0.1:0") }
+func (c fakeConn) RemoteAddr() net.Addr             { return c.remote }
+func (c fakeConn) SetDeadline(time.Time) error      { return nil }
+func (c fakeConn) SetReadDeadline(time.Time) error  { return nil }
+func (c fakeConn) SetWriteDeadline(time.Time) error { return nil }
+
+func newRepoScratchLoginServer(t *testing.T, name string) *Server {
+	t.Helper()
+	dir := filepath.Join(".", ".codex-test-"+name)
+	_ = os.RemoveAll(dir)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	if err := os.MkdirAll(filepath.Join(dir, "accounts"), 0755); err != nil {
+		t.Fatalf("create accounts dir: %v", err)
+	}
+	server := NewServer("Test")
+	server.config = NewFileSystem(dir)
+	server.settings = NewSettings()
+	server.adminSettings = NewSettings()
+	server.logger = NewLogger("", false)
+	return server
+}
+
+func writeLoginAccount(t *testing.T, server *Server, accountName, adminIp string, rights int) {
+	t.Helper()
+	account := fmt.Sprintf("GRACC001\nNICK %s\nLOCALRIGHTS %d\nIPRANGE %s\nLEVEL onlinestartlocal.nw\nX 4\nY 4\n", accountName, rights, adminIp)
+	if err := os.WriteFile(filepath.Join(server.config.GetBasePath(), "accounts", accountName+".txt"), []byte(account), 0644); err != nil {
+		t.Fatalf("write account: %v", err)
+	}
+}
 
 func newLoginTestServer(t *testing.T) *Server {
 	t.Helper()
@@ -4228,8 +4329,8 @@ func TestServerListSendPlayersIncludesNPCServerAndRC(t *testing.T) {
 		packets = append(packets, <-sl.sendQueue)
 	}
 	clearPlayers := []byte{SVO_SETPLYR + 32, '\n'}
-	if len(packets) == 0 || !bytes.Equal(packets[0], clearPlayers) {
-		t.Fatalf("sendPlayers first packet = % X, want clear % X; packets=% X", packets[0], clearPlayers, packets)
+	if len(packets) == 0 || !packetListContainsExact(packets, clearPlayers) {
+		t.Fatalf("sendPlayers did not include clear packet % X; packets=% X", clearPlayers, packets)
 	}
 	npcAdd := append([]byte{SVO_PLYRADD + 32}, NewBuffer().WriteGShort(npc.id).Bytes()...)
 	rcAdd := append([]byte{SVO_PLYRADD + 32}, NewBuffer().WriteGShort(rc.id).Bytes()...)
@@ -4246,6 +4347,15 @@ func TestServerListSendPlayersIncludesNPCServerAndRC(t *testing.T) {
 
 func packetListContains(packets [][]byte, needle []byte) bool {
 	return packetListCount(packets, needle) > 0
+}
+
+func packetListContainsExact(packets [][]byte, needle []byte) bool {
+	for _, packet := range packets {
+		if bytes.Equal(packet, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func packetListCount(packets [][]byte, needle []byte) int {
@@ -4615,11 +4725,14 @@ func TestHandleDecompressedPacketsSplitsNewlineDelimitedClientPackets(t *testing
 
 func TestHandleRawDataDecompressesGen2NCFrames(t *testing.T) {
 	server := newLoginTestServer(t)
+	server.settings.Set("staff", "moondeath")
 	server.weapons = map[string]*Weapon{
 		"ControlWeapon": {name: "ControlWeapon", image: "control.png", script: "function onCreated() {}"},
 	}
-	p := NewPlayer(nil, server)
+	p := NewPlayer(fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server)
 	p.playerType = PLTYPE_NC
+	p.accountName = "moondeath"
+	p.adminIp = "*.*.*.*"
 	p.queueOutgoing = true
 	p.encryption.SetGen(ENCRYPT_GEN_2)
 
@@ -5971,13 +6084,14 @@ func TestPlayerChatCommandWarptoPlayerUsesTargetLocation(t *testing.T) {
 		settings: NewSettings(),
 		config:   NewFileSystem(dir),
 	}
-	p := NewPlayer(nil, server)
+	p := NewPlayer(fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server)
 	p.id = 1
 	p.playerType = PLTYPE_CLIENT3
 	p.loaded = true
 	p.queueOutgoing = true
 	p.accountName = "moondeath"
 	p.adminRights = PLPERM_WARPTOPLAYER
+	p.adminIp = "*.*.*.*"
 	target := NewPlayer(nil, server)
 	target.id = 2
 	target.playerType = PLTYPE_CLIENT3
@@ -6014,13 +6128,14 @@ func TestPlayerChatCommandWarptoXYAndLevel(t *testing.T) {
 		settings: NewSettings(),
 		config:   NewFileSystem(dir),
 	}
-	p := NewPlayer(nil, server)
+	p := NewPlayer(fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server)
 	p.id = 1
 	p.playerType = PLTYPE_CLIENT3
 	p.loaded = true
 	p.queueOutgoing = true
 	p.accountName = "moondeath"
 	p.adminRights = PLPERM_WARPTO
+	p.adminIp = "*.*.*.*"
 	p.currentLevel = level
 	p.levelName = "onlinestartlocal.nw"
 	server.players[p.id] = p

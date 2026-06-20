@@ -1468,6 +1468,9 @@ func (p *Player) rcFolderMap() map[string]string {
 			rights = strings.ToLower(strings.TrimSpace(parts[0]))
 			folderPath = strings.TrimSpace(parts[1])
 		}
+		if !strings.Contains(rights, "r") {
+			continue
+		}
 		folderPath = strings.ReplaceAll(folderPath, "\\", "/")
 		folderPath = strings.TrimSpace(folderPath)
 		wild := "*"
@@ -1508,6 +1511,55 @@ func (p *Player) rcFileBrowserFolderList(folderMap map[string]string) string {
 	}
 	sort.Strings(folders)
 	return strings.Join(folders, "\n")
+}
+
+func (p *Player) rcFileRights(filePath string) string {
+	filePath = filepath.ToSlash(strings.TrimLeft(strings.TrimSpace(filePath), "/"))
+	if filePath == "" || strings.Contains(filePath, "..") || strings.Contains(filePath, ":") {
+		return ""
+	}
+	rightSet := make(map[rune]bool)
+	for _, entry := range p.folderList {
+		rights := "r"
+		pattern := entry
+		if parts := strings.SplitN(entry, " ", 2); len(parts) == 2 {
+			rights = strings.ToLower(strings.TrimSpace(parts[0]))
+			pattern = strings.TrimSpace(parts[1])
+		}
+		pattern = filepath.ToSlash(strings.TrimLeft(strings.TrimSpace(pattern), "/"))
+		if pattern == "" || strings.Contains(pattern, "..") || strings.Contains(pattern, ":") {
+			continue
+		}
+		matched, err := filepath.Match(pattern, filePath)
+		if err != nil || !matched {
+			continue
+		}
+		for _, right := range rights {
+			if right == 'r' || right == 'w' {
+				rightSet[right] = true
+			}
+		}
+	}
+	rights := ""
+	if rightSet['r'] {
+		rights += "r"
+	}
+	if rightSet['w'] {
+		rights += "w"
+	}
+	return rights
+}
+
+func (p *Player) rcFileHasRight(filePath string, right rune) bool {
+	return strings.ContainsRune(p.rcFileRights(filePath), right)
+}
+
+func (p *Player) rcFolderHasRight(folderPath string, right rune) bool {
+	folderPath = filepath.ToSlash(strings.Trim(folderPath, "/"))
+	if folderPath == "" {
+		return p.rcFileHasRight("x", right)
+	}
+	return p.rcFileHasRight(folderPath+"/x", right)
 }
 
 func (p *Player) expandRCFolderPath(folderPath string) []string {
@@ -1583,39 +1635,27 @@ func (p *Player) sendRCFileBrowserDir(folderMap map[string]string) {
 		buf.WriteByte(byte(len(entryData)))
 		buf.Write(entryData)
 	}
-	wildcards := strings.Split(folderMap[p.lastFolder], "\n")
-	for _, wildcardEntry := range wildcards {
-		if wildcardEntry == "" {
+	for _, file := range files {
+		filePath := p.lastFolder + file
+		rights := p.rcFileRights(filePath)
+		if !strings.Contains(rights, "r") {
 			continue
 		}
-		parts := strings.SplitN(wildcardEntry, ":", 2)
-		if len(parts) != 2 {
+		fileInfo, err := p.server.config.FileInfo(filePath)
+		if err != nil {
 			continue
 		}
-		rights := parts[0]
-		wildcard := parts[1]
-		for _, file := range files {
-			matched, err := filepath.Match(wildcard, file)
-			if err != nil || !matched {
-				continue
-			}
-			filePath := p.lastFolder + file
-			fileInfo, err := p.server.config.FileInfo(filePath)
-			if err != nil {
-				continue
-			}
-			entry := NewBuffer()
-			entry.WriteByte(byte(len(file)))
-			entry.Write([]byte(file))
-			entry.WriteByte(byte(len(rights)))
-			entry.Write([]byte(rights))
-			entry.WriteGInt5(uint64(fileInfo.Size()))
-			entry.WriteGInt5(uint64(fileInfo.ModTime().Unix()))
-			entryData := entry.Bytes()
-			buf.WriteByte(' ')
-			buf.WriteByte(byte(len(entryData)))
-			buf.Write(entryData)
-		}
+		entry := NewBuffer()
+		entry.WriteByte(byte(len(file)))
+		entry.Write([]byte(file))
+		entry.WriteByte(byte(len(rights)))
+		entry.Write([]byte(rights))
+		entry.WriteGInt5(uint64(fileInfo.Size()))
+		entry.WriteGInt5(uint64(fileInfo.ModTime().Unix()))
+		entryData := entry.Bytes()
+		buf.WriteByte(' ')
+		buf.WriteByte(byte(len(entryData)))
+		buf.Write(entryData)
 	}
 	p.send(buf)
 }
@@ -1659,6 +1699,10 @@ func (p *Player) msgPLI_RC_FILEBROWSER_DOWN(packet []byte) bool {
 		fileName = string(packet[1:])
 	}
 	filePath := p.lastFolder + fileName
+	if !p.rcFileHasRight(filePath, 'r') {
+		p.send(fileBrowserMessagePacket("Insufficient rights to download/view " + filePath))
+		return true
+	}
 	protectedFiles := []string{"accounts/defaultaccount.txt", "config/adminconfig.txt", "config/allowedversions.txt", "config/rchelp.txt"}
 	if !p.hasRight(PLPERM_MODIFYSTAFFACCOUNT) {
 		for _, protected := range protectedFiles {
@@ -1710,6 +1754,10 @@ func (p *Player) msgPLI_RC_FILEBROWSER_UP(packet []byte) bool {
 	nameLen := int(buf.ReadByte())
 	fileName := string(buf.ReadBytes(nameLen))
 	filePath := p.lastFolder + fileName
+	if !p.rcFileHasRight(filePath, 'w') {
+		p.send(fileBrowserMessagePacket("Insufficient rights to upload " + filePath))
+		return true
+	}
 	importantFiles := []string{"accounts/defaultaccount.txt", "config/adminconfig.txt", "config/allowedversions.txt", "config/foldersconfig.txt", "config/ipbans.txt", "config/rchelp.txt", "config/rcmessage.txt", "config/rules.txt", "config/servermessage.html", "config/serveroptions.txt"}
 	importantFileRights := []int{PLPERM_MODIFYSTAFFACCOUNT, PLPERM_MODIFYSTAFFACCOUNT, PLPERM_MODIFYSTAFFACCOUNT, PLPERM_SETFOLDEROPTIONS, PLPERM_MODIFYSTAFFACCOUNT, PLPERM_MODIFYSTAFFACCOUNT, PLPERM_MODIFYSTAFFACCOUNT, PLPERM_MODIFYSTAFFACCOUNT, PLPERM_MODIFYSTAFFACCOUNT, PLPERM_SETSERVEROPTIONS}
 	isProtected := false
@@ -1769,6 +1817,10 @@ func (p *Player) msgPLI_RC_FILEBROWSER_MOVE(packet []byte) bool {
 	}
 	source := p.lastFolder + fileName
 	destination := dir + fileName
+	if !p.rcFileHasRight(source, 'w') || !p.rcFileHasRight(destination, 'w') {
+		p.send(fileBrowserMessagePacket("Not allowed to move file " + source))
+		return true
+	}
 	importantFiles := []string{"accounts/defaultaccount.txt", "config/adminconfig.txt", "config/allowedversions.txt", "config/foldersconfig.txt", "config/ipbans.txt", "config/rchelp.txt", "config/rcmessage.txt", "config/rules.txt", "config/servermessage.html", "config/serveroptions.txt"}
 	for _, important := range importantFiles {
 		if source == important {
@@ -1802,6 +1854,10 @@ func (p *Player) msgPLI_RC_FILEBROWSER_DELETE(packet []byte) bool {
 		fileName = string(packet[1:])
 	}
 	filePath := p.lastFolder + fileName
+	if !p.rcFileHasRight(filePath, 'w') {
+		p.send(fileBrowserMessagePacket("Not allowed to delete file " + filePath))
+		return true
+	}
 	importantFiles := []string{"accounts/defaultaccount.txt", "config/adminconfig.txt", "config/allowedversions.txt", "config/foldersconfig.txt", "config/ipbans.txt", "config/rchelp.txt", "config/rcmessage.txt", "config/rules.txt", "config/servermessage.html", "config/serveroptions.txt"}
 	for _, important := range importantFiles {
 		if filePath == important {
@@ -1830,6 +1886,10 @@ func (p *Player) msgPLI_RC_FILEBROWSER_RENAME(packet []byte) bool {
 	newName := string(buf.ReadBytes(newLen))
 	oldPath := p.lastFolder + oldName
 	newPath := p.lastFolder + newName
+	if !p.rcFileHasRight(oldPath, 'w') || !p.rcFileHasRight(newPath, 'w') {
+		p.send(fileBrowserMessagePacket("Not allowed to rename/overwrite file " + oldPath + " or " + newPath))
+		return true
+	}
 	importantFiles := []string{"accounts/defaultaccount.txt", "config/adminconfig.txt", "config/allowedversions.txt", "config/foldersconfig.txt", "config/ipbans.txt", "config/rchelp.txt", "config/rcmessage.txt", "config/rules.txt", "config/servermessage.html", "config/serveroptions.txt"}
 	for _, important := range importantFiles {
 		if oldPath == important || newPath == important {
@@ -1863,6 +1923,10 @@ func (p *Player) msgPLI_RC_LARGEFILESTART(packet []byte) bool {
 	if len(packet) > 1 {
 		fileName = string(packet[1:])
 	}
+	if !p.rcFileHasRight(p.lastFolder+fileName, 'w') {
+		p.send(fileBrowserMessagePacket("Insufficient rights to upload " + p.lastFolder + fileName))
+		return true
+	}
 	p.rcLargeFiles[fileName] = ""
 	return true
 }
@@ -1876,6 +1940,10 @@ func (p *Player) msgPLI_RC_LARGEFILEEND(packet []byte) bool {
 		fileName = string(packet[1:])
 	}
 	filePath := p.lastFolder + fileName
+	if !p.rcFileHasRight(filePath, 'w') {
+		p.send(fileBrowserMessagePacket("Insufficient rights to upload " + filePath))
+		return true
+	}
 	fileData, exists := p.rcLargeFiles[fileName]
 	if !exists {
 		return true
@@ -1901,6 +1969,10 @@ func (p *Player) msgPLI_RC_FOLDERDELETE(packet []byte) bool {
 	}
 	if p.playerType != PLTYPE_RC && p.playerType != PLTYPE_RC2 && p.playerType != PLTYPE_ANYRC {
 		p.server.logger.Warning("[Hack] %s attempted FOLDERDELETE (non-RC): %s", p.accountName, folder)
+		return true
+	}
+	if !p.rcFolderHasRight(folder, 'w') {
+		p.send(fileBrowserMessagePacket("Not allowed to delete folder " + folder))
 		return true
 	}
 	if err := os.RemoveAll(folderPath); err != nil {
