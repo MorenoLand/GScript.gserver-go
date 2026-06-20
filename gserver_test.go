@@ -6189,6 +6189,29 @@ func TestPlayerChatCommandSetNickBroadcastsNicknameProp(t *testing.T) {
 	}
 }
 
+func TestPlayerChatCommandDefersSelfPropsUntilReceiveBatchEnds(t *testing.T) {
+	server := &Server{logger: NewLogger("", false), players: make(map[uint16]*Player), settings: NewSettings()}
+	p := NewPlayer(nil, server)
+	p.id = 1
+	p.queueOutgoing = true
+	p.accountName = "moondeath"
+	p.character.nickName = "moondeath"
+	p.processingPackets = true
+	p.clearChatWithProps(PLPROP_NICKNAME)
+	if len(p.outQueue) != 0 {
+		t.Fatalf("self props were sent before batch flush: % X", p.outQueue)
+	}
+	if len(p.deferredSelfPackets) != 1 {
+		t.Fatalf("deferred self packets = %d, want 1", len(p.deferredSelfPackets))
+	}
+	p.processingPackets = false
+	p.flushDeferredSelfPackets()
+	want := append([]byte{PLO_PLAYERPROPS + 32, PLPROP_NICKNAME + 32, byte(len("moondeath") + 32)}, []byte("moondeath")...)
+	if !bytes.Contains(p.outQueue, want) {
+		t.Fatalf("deferred self props missing % X in % X", want, p.outQueue)
+	}
+}
+
 func TestPlayerChatCommandShowAdminsSendsChatProp(t *testing.T) {
 	level := NewLevel()
 	level.levelName = "onlinestartlocal.nw"
