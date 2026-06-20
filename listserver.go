@@ -66,6 +66,30 @@ func (s *Server) sendPlayerTextToListservers(packetId byte, playerID uint16, tex
 	return sent
 }
 
+func (s *Server) sendTextToListservers(packetId byte, text string) bool {
+	if s == nil {
+		return false
+	}
+	sent := false
+	seen := make(map[*ServerList]bool)
+	for _, serverList := range s.serverLists {
+		if serverList == nil || seen[serverList] {
+			continue
+		}
+		seen[serverList] = true
+		if !serverList.connected {
+			continue
+		}
+		serverList.SendTextPacket(packetId, text)
+		sent = true
+	}
+	if s.serverList != nil && !seen[s.serverList] && s.serverList.connected {
+		s.serverList.SendTextPacket(packetId, text)
+		sent = true
+	}
+	return sent
+}
+
 func (s *Server) sendLoginPacketToListservers(player *Player, password, identity string) bool {
 	if s == nil || player == nil {
 		return false

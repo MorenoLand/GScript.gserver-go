@@ -75,6 +75,9 @@ type Server struct {
 	last5mTimer     time.Time
 	shutdown        chan struct{}
 	wordFilter      *WordFilter
+	scriptHelpMu    sync.RWMutex
+	scriptHelp      []ScriptHelpEntry
+	scriptHelpReady bool
 }
 
 func NewServer(name string) *Server {
@@ -127,6 +130,7 @@ func (s *Server) Init(serverIP, serverPort, localIP, serverInterface string) err
 func (s *Server) Run() error {
 	s.running = true
 	s.logger.Info("Server started")
+	go s.refreshScriptHelpCache()
 	go s.acceptConnections()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -145,6 +149,9 @@ func (s *Server) Run() error {
 func (s *Server) Stop() {
 	close(s.shutdown)
 	s.running = false
+	if s.npcServer != nil {
+		s.npcServer.stopWatching()
+	}
 	if s.listener != nil {
 		s.listener.Close()
 	}
@@ -426,18 +433,19 @@ func parseWeapon(data string) *Weapon {
 	inScript := false
 	var scriptLines []string
 	for i := 1; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			continue
-		}
+		rawLine := strings.TrimRight(lines[i], "\r")
+		line := strings.TrimSpace(rawLine)
 		if inScript {
 			if line == "SCRIPTEND" {
 				inScript = false
 				weapon.script = strings.Join(scriptLines, "\n")
 				scriptLines = nil
 			} else {
-				scriptLines = append(scriptLines, line)
+				scriptLines = append(scriptLines, rawLine)
 			}
+			continue
+		}
+		if line == "" {
 			continue
 		}
 		if strings.HasPrefix(line, "REALNAME ") {
@@ -1389,6 +1397,33 @@ func (s *Server) sendToNCExcept(message string, exclude *Player) {
 	}
 }
 
+func (s *Server) sendNCNotice(message string, exclude *Player) {
+	if s == nil {
+		return
+	}
+	if line, _, ok := strings.Cut(message, "\n"); ok {
+		message = line
+	}
+	message = strings.TrimRight(message, "\r")
+	if message == "" {
+		return
+	}
+	s.playerMu.RLock()
+	targets := make([]*Player, 0, len(s.players))
+	for _, p := range s.players {
+		if p == nil || p == exclude || !p.isLoggedIn() {
+			continue
+		}
+		if p.playerType&PLTYPE_ANYNC != 0 || (p.playerType&PLTYPE_ANYRC != 0 && p.hasRight(PLPERM_NPCCONTROL)) {
+			targets = append(targets, p)
+		}
+	}
+	s.playerMu.RUnlock()
+	for _, p := range targets {
+		p.send(NewBufferFromBytes(rcChatPacket(message)))
+	}
+}
+
 func (s *Server) sendPacketToAll(data []byte, excludeId uint16) {
 	s.playerMu.RLock()
 	defer s.playerMu.RUnlock()
@@ -2158,18 +2193,7 @@ func (p *Player) sendRCLoginPayload() {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_RC_MAXUPLOADFILESIZE).WriteGInt5(uint64(maxUpload))
 	p.send(buf)
-
-	lines, err := p.server.config.LoadFileAsLines("config/rcmessage.txt")
-	if err == nil && len(lines) > 0 {
-		for _, line := range lines {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				p.sendPLO_RC_CHAT(line)
-			}
-		}
-		return
-	}
-	p.sendPLO_RC_CHAT("Welcome to " + p.server.name + " RC.")
+	p.sendPLO_RC_CHAT("Welcome to the GServer for " + p.server.configuredName() + ", type /help for a list of available commands")
 }
 
 func (p *Player) sendPLO_RC_CHAT(message string) bool {
@@ -2258,17 +2282,31 @@ func (p *Player) sendRCPostLoginTail() {
 	p.sendStaffGuilds()
 	p.server.broadcastPlayerListEntryToClients(p)
 	p.server.playerMu.RLock()
+	existingRC := make([]string, 0)
+	existingNC := make([]string, 0)
 	for _, other := range p.server.players {
 		if other == nil || other.id == p.id || !other.isLoggedIn() {
 			continue
 		}
 		if other.playerType&PLTYPE_ANYNC != 0 {
+			if p.hasRight(PLPERM_NPCCONTROL) {
+				existingNC = append(existingNC, other.rcDisplayName())
+			}
 			continue
+		}
+		if other.playerType&PLTYPE_ANYRC != 0 {
+			existingRC = append(existingRC, other.rcDisplayName())
 		}
 		p.sendPLO_ADDPLAYER(other)
 	}
 	p.server.playerMu.RUnlock()
-	p.server.sendRCChat("New RC: " + p.accountName)
+	for _, name := range existingRC {
+		p.sendPLO_RC_CHAT("New RC: " + name)
+	}
+	for _, name := range existingNC {
+		p.sendPLO_RC_CHAT("New NC: " + name)
+	}
+	p.server.sendRCChat("New RC: " + p.rcDisplayName())
 }
 
 func (p *Player) sendNCPostLoginTail() {
@@ -2279,11 +2317,11 @@ func (p *Player) sendNCPostLoginTail() {
 	p.server.playerMu.RLock()
 	for _, other := range p.server.players {
 		if other != nil && other != p && other.playerType&PLTYPE_ANYNC != 0 && other.isLoggedIn() {
-			p.sendPLO_RC_CHAT("New NC: " + other.accountName)
+			p.sendPLO_RC_CHAT("New NC: " + other.rcDisplayName())
 		}
 	}
 	p.server.playerMu.RUnlock()
-	p.server.sendToNCExcept("New NC: "+p.accountName, p)
+	p.server.sendNCNotice("New NC: "+p.rcDisplayName(), p)
 }
 
 func (s *Server) configuredName() string {
@@ -2299,6 +2337,21 @@ func (s *Server) configuredName() string {
 		return name
 	}
 	return "GServer"
+}
+
+func (p *Player) rcDisplayName() string {
+	if p == nil {
+		return ""
+	}
+	account := strings.TrimSpace(p.accountName)
+	nick := strings.TrimSpace(p.character.nickName)
+	if nick == "" || strings.EqualFold(nick, account) {
+		return account
+	}
+	if account == "" {
+		return nick
+	}
+	return nick + " (" + account + ")"
 }
 
 func (p *Player) sendNCNPCList() {
@@ -2991,7 +3044,7 @@ func (p *Player) handleRawData(data []byte) {
 	if len(data) == 0 {
 		return
 	}
-	p.server.logger.PacketDebug("handleRawData: RAW data: % X (gen=%d)", data, p.encryption.gen)
+	p.server.logger.PacketDebug("handleRawData: RAW data: %s (gen=%d)", debugHexPreview(data), p.encryption.gen)
 	var decompressed []byte
 	var err error
 	if p.encryption.gen == ENCRYPT_GEN_4 {
@@ -3009,7 +3062,7 @@ func (p *Player) handleRawData(data []byte) {
 		}
 		compressType := data[0]
 		encryptedData := data[1:]
-		p.server.logger.PacketDebug("handleRawData: GEN_5+ - compressType=%d, encrypted data: % X", compressType, encryptedData)
+		p.server.logger.PacketDebug("handleRawData: GEN_5+ - compressType=%d, encrypted data: %s", compressType, debugHexPreview(encryptedData))
 		// Set encryption limit based on compression type
 		limits := map[uint8]int32{COMPRESS_UNCOMPRESSED: 12, COMPRESS_ZLIB: 4, COMPRESS_BZ2: 4}
 		if limit, ok := limits[compressType]; ok {
@@ -3017,7 +3070,7 @@ func (p *Player) handleRawData(data []byte) {
 		}
 		p.server.logger.PacketDebug("handleRawData: BEFORE decrypt - iterator=%08X limit=%d", p.encryption.iterator, p.encryption.limit)
 		p.encryption.Decrypt(encryptedData)
-		p.server.logger.PacketDebug("handleRawData: AFTER decrypt - iterator=%08X data: % X", p.encryption.iterator, encryptedData)
+		p.server.logger.PacketDebug("handleRawData: AFTER decrypt - iterator=%08X data: %s", p.encryption.iterator, debugHexPreview(encryptedData))
 		if compressType == COMPRESS_ZLIB {
 			decompressed, err = ZlibDecompress(encryptedData)
 			if err != nil {
@@ -3048,8 +3101,16 @@ func (p *Player) handleRawData(data []byte) {
 		p.handleDecompressedPackets(data)
 		return
 	}
-	p.server.logger.PacketDebug("handleRawData: DECOMPRESSED data: % X", decompressed)
+	p.server.logger.PacketDebug("handleRawData: DECOMPRESSED data: %s", debugHexPreview(decompressed))
 	p.handleDecompressedPackets(decompressed)
+}
+
+func debugHexPreview(data []byte) string {
+	const limit = 64
+	if len(data) <= limit {
+		return fmt.Sprintf("% X", data)
+	}
+	return fmt.Sprintf("% X ... (%d bytes)", data[:limit], len(data))
 }
 
 func (p *Player) handleDecompressedPackets(data []byte) {
@@ -3080,20 +3141,31 @@ func (p *Player) sendPacket(packet []byte) {
 	if packetName == "" {
 		packetName = "UNKNOWN"
 	}
-	p.server.logger.PacketDebug("sendPacket: RAW %s (ID %d): % X", packetName, packetId, packet)
+	if !quietOutgoingPacketDebug(packetId) {
+		p.server.logger.PacketDebug("sendPacket: RAW %s (ID %d): % X", packetName, packetId, packet)
+	}
 	if p.queueOutgoing {
-		p.server.logger.PacketDebug("sendPacket: queued %s (ID %d), %d bytes", packetName, packetId, len(packet))
+		if !quietOutgoingPacketDebug(packetId) {
+			p.server.logger.PacketDebug("sendPacket: queued %s (ID %d), %d bytes", packetName, packetId, len(packet))
+		}
 		p.outQueue = append(p.outQueue, packet...)
 		return
 	}
 	p.writeEncodedPacket(packetName, packetId, packet)
 }
 
+func quietOutgoingPacketDebug(packetId byte) bool {
+	return packetId == PLO_TOALL || packetId == PLO_NPCWEAPONADD || packetId == PLO_NPCWEAPONSCRIPT
+}
+
 func (p *Player) writeEncodedPacket(packetName string, packetId byte, packet []byte) {
 	var data []byte
+	quietDebug := quietOutgoingPacketDebug(packetId)
 	switch p.encryption.gen {
 	case ENCRYPT_GEN_1:
-		p.server.logger.PacketDebug("sendPacket: GEN_1, sending %s (ID %d), raw %d bytes", packetName, packetId, len(packet))
+		if !quietDebug {
+			p.server.logger.PacketDebug("sendPacket: GEN_1, sending %s (ID %d), raw %d bytes", packetName, packetId, len(packet))
+		}
 		data = packet
 	case ENCRYPT_GEN_2, ENCRYPT_GEN_3:
 		compressed, err := ZlibCompress(packet)
@@ -3105,7 +3177,9 @@ func (p *Player) writeEncodedPacket(packetName string, packetId byte, packet []b
 			p.server.logger.Error("sendPacket: compressed packet too large (%d bytes)", len(compressed))
 			return
 		}
-		p.server.logger.PacketDebug("sendPacket: GEN_%d, sending %s (ID %d), compressed %d -> %d bytes", p.encryption.gen, packetName, packetId, len(packet), len(compressed))
+		if !quietDebug {
+			p.server.logger.PacketDebug("sendPacket: GEN_%d, sending %s (ID %d), compressed %d -> %d bytes", p.encryption.gen, packetName, packetId, len(packet), len(compressed))
+		}
 		data = make([]byte, 2+len(compressed))
 		data[0] = byte(len(compressed) >> 8)
 		data[1] = byte(len(compressed))
@@ -3137,11 +3211,13 @@ func (p *Player) writeEncodedPacket(packetName string, packetId byte, packet []b
 		if limit, ok := limits[compressionType]; ok {
 			p.outEncryption.limit = limit
 		}
-		// Encrypt the compressed data with OUTPUT codec
-		p.server.logger.PacketDebug("sendPacket: BEFORE encrypt - outIterator=%08X limit=%d", p.outEncryption.iterator, p.outEncryption.limit)
+		if !quietDebug {
+			p.server.logger.PacketDebug("sendPacket: BEFORE encrypt - outIterator=%08X limit=%d", p.outEncryption.iterator, p.outEncryption.limit)
+		}
 		encrypted := p.outEncryption.Encrypt(compressed)
-		p.server.logger.PacketDebug("sendPacket: AFTER encrypt - outIterator=%08X", p.outEncryption.iterator)
-		// Build packet: [length_hi][length_lo][compression_type][encrypted...]
+		if !quietDebug {
+			p.server.logger.PacketDebug("sendPacket: AFTER encrypt - outIterator=%08X", p.outEncryption.iterator)
+		}
 		frameLen := 1 + len(encrypted)
 		if frameLen > 0xFFFC {
 			p.server.logger.Error("sendPacket: GEN_5 packet too large (%s ID %d, %d bytes)", packetName, packetId, frameLen)
@@ -3152,12 +3228,18 @@ func (p *Player) writeEncodedPacket(packetName string, packetId byte, packet []b
 		data[1] = byte(frameLen)
 		data[2] = compressionType
 		copy(data[3:], encrypted)
-		p.server.logger.PacketDebug("sendPacket: GEN_5, sending %s (ID %d), original %d bytes, compressed %d bytes, compression_type=%d", packetName, packetId, len(packet), len(compressed), compressionType)
+		if !quietDebug {
+			p.server.logger.PacketDebug("sendPacket: GEN_5, sending %s (ID %d), original %d bytes, compressed %d bytes, compression_type=%d", packetName, packetId, len(packet), len(compressed), compressionType)
+		}
 	default:
-		p.server.logger.PacketDebug("sendPacket: Unknown GEN_%d, sending %s (ID %d), raw %d bytes", p.encryption.gen, packetName, packetId, len(packet))
+		if !quietDebug {
+			p.server.logger.PacketDebug("sendPacket: Unknown GEN_%d, sending %s (ID %d), raw %d bytes", p.encryption.gen, packetName, packetId, len(packet))
+		}
 		data = packet
 	}
-	p.server.logger.PacketDebug("sendPacket: Writing %d bytes: % X", len(data), data)
+	if !quietDebug {
+		p.server.logger.PacketDebug("sendPacket: Writing %d bytes: % X", len(data), data)
+	}
 	p.mu.Lock()
 	conn := p.conn
 	disconnected := p.disconnected
@@ -4171,13 +4253,28 @@ func (p *Player) applyLevelItem(itemType LevelItemType) bool {
 }
 
 func (p *Player) msgPLI_LEVELWARP(packet []byte) bool {
+	if p == nil || p.server == nil || p.disconnected || !p.server.running {
+		return true
+	}
 	buf := NewBufferFromBytes(packet[1:])
 	modTime := int64(0)
 	if packet[0] == PLI_LEVELWARPMOD {
+		if buf.BytesLeft() < 5 {
+			p.server.logger.Debug("Ignoring short LEVELWARPMOD packet from %s: % X", p.accountName, packet)
+			return true
+		}
 		modTime = int64(buf.ReadGInt5())
 	}
+	if buf.BytesLeft() < 3 {
+		p.server.logger.Debug("Ignoring short LEVELWARP packet from %s: % X", p.accountName, packet)
+		return true
+	}
 	x, y := float32(buf.ReadGChar())/2, float32(buf.ReadGChar())/2
-	levelName := string(buf.ReadBytes(buf.BytesLeft()))
+	levelName := strings.TrimSpace(string(buf.ReadBytes(buf.BytesLeft())))
+	if levelName == "" || len(levelName) < 3 || strings.ContainsAny(levelName, "\x00\r\n") {
+		p.server.logger.Debug("Ignoring invalid LEVELWARP target from %s: %q", p.accountName, levelName)
+		return true
+	}
 	p.warp(levelName, float64(x), float64(y), modTime)
 	return true
 }
@@ -7885,27 +7982,27 @@ func (sl *ServerList) refreshServerSettings() {
 
 func (sl *ServerList) SetName(name string) {
 	buf := NewBuffer()
-	buf.WriteGChar(SVO_SETNAME).WriteString8Encoded(name)
+	buf.WriteGChar(SVO_SETNAME).Write([]byte(name))
 	sl.SendPacket(buf.Bytes())
 }
 func (sl *ServerList) SetDesc(desc string) {
 	buf := NewBuffer()
-	buf.WriteGChar(SVO_SETDESC).WriteString8Encoded(desc)
+	buf.WriteGChar(SVO_SETDESC).Write([]byte(desc))
 	sl.SendPacket(buf.Bytes())
 }
 func (sl *ServerList) SetLang(lang string) {
 	buf := NewBuffer()
-	buf.WriteGChar(SVO_SETLANG).WriteString8Encoded(lang)
+	buf.WriteGChar(SVO_SETLANG).Write([]byte(lang))
 	sl.SendPacket(buf.Bytes())
 }
 func (sl *ServerList) SetVers(vers string) {
 	buf := NewBuffer()
-	buf.WriteGChar(SVO_SETVERS).WriteString8Encoded(vers)
+	buf.WriteGChar(SVO_SETVERS).Write([]byte(vers))
 	sl.SendPacket(buf.Bytes())
 }
 func (sl *ServerList) SetUrl(url string) {
 	buf := NewBuffer()
-	buf.WriteGChar(SVO_SETURL).WriteString8Encoded(url)
+	buf.WriteGChar(SVO_SETURL).Write([]byte(url))
 	sl.SendPacket(buf.Bytes())
 }
 func (sl *ServerList) SetIp(ip string) {
@@ -7915,7 +8012,7 @@ func (sl *ServerList) SetIp(ip string) {
 }
 func (sl *ServerList) SetPort(port string) {
 	buf := NewBuffer()
-	buf.WriteGChar(SVO_SETPORT).WriteString8Encoded(port)
+	buf.WriteGChar(SVO_SETPORT).Write([]byte(port))
 	sl.SendPacket(buf.Bytes())
 }
 func (sl *ServerList) SetPlyr(count int) {

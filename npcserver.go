@@ -1,8 +1,12 @@
 package main
 
 import (
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/fsnotify/fsnotify"
 )
 
 const npcServerAccountName = "(npcserver)"
@@ -13,11 +17,17 @@ const npcServerDefaultPMReply = "I am the npcserver for\nthis game server. Almos
 // Keep the GServer-facing methods small so an external NPC-server transport can
 // implement the same boundary later without rewriting the game-server callers.
 type NPCServer struct {
-	host *Server
+	host       *Server
+	watcher    *fsnotify.Watcher
+	watchStop  chan struct{}
+	watching   bool
+	watchMu    sync.Mutex
+	debounce   map[string]time.Time
+	debounceMu sync.Mutex
 }
 
 func NewNPCServer(host *Server) *NPCServer {
-	return &NPCServer{host: host}
+	return &NPCServer{host: host, debounce: make(map[string]time.Time)}
 }
 
 func (s *Server) ensureNPCServer() *NPCServer {
@@ -50,8 +60,10 @@ func (n *NPCServer) Sync() {
 		} else {
 			n.Start()
 		}
+		n.startWatching()
 		return
 	}
+	n.stopWatching()
 	if player := n.Player(); player != nil {
 		n.host.DeletePlayer(player)
 	}
@@ -228,6 +240,155 @@ func (n *NPCServer) SendNPCAdd(to *Player, npc *NPC) {
 	buf.WriteGChar(NPCPROP_CURLEVEL)
 	buf.WriteGChar(byte(len(levelName))).Write([]byte(levelName))
 	to.send(buf)
+}
+
+func (n *NPCServer) startWatching() {
+	if n == nil || n.host == nil || n.host.config == nil {
+		return
+	}
+	n.watchMu.Lock()
+	defer n.watchMu.Unlock()
+	if n.watching {
+		return
+	}
+	w, err := fsnotify.NewWatcher()
+	if err != nil {
+		n.host.logger.Warning("Could not start file watcher: %v", err)
+		return
+	}
+	n.watcher = w
+	n.watchStop = make(chan struct{})
+	n.watching = true
+
+	base := n.host.config.GetBasePath()
+	for _, dir := range []string{"weapons", "scripts"} {
+		full := filepath.Join(base, dir)
+		if err := w.Add(full); err != nil {
+			n.host.logger.Warning("Could not watch %s: %v", dir, err)
+		}
+	}
+
+	n.host.logger.Info("Watching weapons/ and scripts/ for live reload")
+	go n.watchLoop()
+}
+
+func (n *NPCServer) stopWatching() {
+	if n == nil {
+		return
+	}
+	n.watchMu.Lock()
+	defer n.watchMu.Unlock()
+	if !n.watching {
+		return
+	}
+	n.watching = false
+	if n.watchStop != nil {
+		close(n.watchStop)
+		n.watchStop = nil
+	}
+	if n.watcher != nil {
+		n.watcher.Close()
+		n.watcher = nil
+	}
+}
+
+func (n *NPCServer) watchLoop() {
+	for {
+		select {
+		case <-n.watchStop:
+			return
+		case event, ok := <-n.watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
+				continue
+			}
+			n.debounceMu.Lock()
+			if time.Since(n.debounce[event.Name]) < 500*time.Millisecond {
+				n.debounceMu.Unlock()
+				continue
+			}
+			n.debounce[event.Name] = time.Now()
+			n.debounceMu.Unlock()
+
+			time.Sleep(100 * time.Millisecond)
+			n.handleFileEvent(event.Name)
+
+		case err, ok := <-n.watcher.Errors:
+			if !ok {
+				return
+			}
+			n.host.logger.Warning("File watcher error: %v", err)
+		}
+	}
+}
+
+func (n *NPCServer) handleFileEvent(fullPath string) {
+	base := n.host.config.GetBasePath()
+	rel, err := filepath.Rel(base, fullPath)
+	if err != nil {
+		return
+	}
+	rel = filepath.ToSlash(rel)
+	fileBase := filepath.Base(fullPath)
+
+	switch {
+	case strings.HasPrefix(rel, "weapons/") && strings.HasSuffix(strings.ToLower(fileBase), ".txt"):
+		n.reloadWeaponFromDisk(rel)
+	case strings.HasPrefix(rel, "scripts/") && strings.HasSuffix(strings.ToLower(fileBase), ".txt"):
+		n.reloadClassFromDisk(rel, fileBase)
+	}
+}
+
+func (n *NPCServer) reloadWeaponFromDisk(relPath string) {
+	data, err := n.host.config.LoadFile(relPath)
+	if err != nil {
+		return
+	}
+	w := parseWeapon(string(data))
+	if w == nil {
+		return
+	}
+	if w.bytecodeFile != "" {
+		if bc, err := n.host.config.LoadFile("weapon_bytecode/" + w.bytecodeFile); err == nil {
+			w.bytecode = bc
+		}
+	}
+
+	n.host.weaponMu.Lock()
+	existing := n.host.weapons[strings.ToLower(w.name)]
+	if existing != nil {
+		existing.image = w.image
+		existing.script = w.script
+		existing.bytecode = nil
+		existing.bytecodeFile = w.bytecodeFile
+	} else {
+		n.host.weapons[strings.ToLower(w.name)] = w
+		existing = w
+	}
+	n.host.weaponMu.Unlock()
+
+	n.host.ensureWeaponBytecode(existing)
+	n.host.updateWeaponForPlayers(existing)
+	n.host.logger.Info("Reloaded weapon %s from disk", w.name)
+}
+
+func (n *NPCServer) reloadClassFromDisk(relPath, fileName string) {
+	data, err := n.host.config.LoadFile(relPath)
+	if err != nil {
+		return
+	}
+	name := strings.TrimSuffix(fileName, filepath.Ext(fileName))
+	code := strings.ReplaceAll(string(data), "\r\n", "\n")
+
+	n.host.weaponMu.Lock()
+	n.host.classes[name] = &ScriptClass{name: name, script: code}
+	cls := n.host.classes[name]
+	n.host.weaponMu.Unlock()
+
+	n.host.updateClassForPlayers(cls)
+	n.host.logger.Info("Reloaded class %s from disk", name)
 }
 
 func (n *NPCServer) newNPCPlayer() *Player {

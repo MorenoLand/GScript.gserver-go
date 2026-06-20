@@ -1,11 +1,24 @@
 package main
 
 import (
+	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 	"time"
 )
+
+type ScriptHelpEntry struct {
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	Params      []string `json:"params"`
+	Returns     string   `json:"returns"`
+	Scope       string   `json:"scope"`
+	Description string   `json:"description"`
+}
 
 func rcChatPacket(message string) []byte {
 	buf := NewBuffer()
@@ -795,6 +808,8 @@ func (p *Player) handleRCCommand(message string) bool {
 		if len(words) == 1 {
 			p.sendRCHelp()
 		}
+	case "/scripthelp":
+		p.sendScriptHelp(arg)
 	case "/open":
 		if arg != "" {
 			return p.msgPLI_RC_PLAYERPROPSGET3(rcCommandAccountPacket(arg))
@@ -823,6 +838,135 @@ func (p *Player) handleRCCommand(message string) bool {
 	return true
 }
 
+func (s *Server) refreshScriptHelpCache() {
+	if s == nil {
+		return
+	}
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Get("https://api.gscript.dev")
+	if err != nil {
+		if s.logger != nil {
+			s.logger.Warning("Script help cache failed: %v", err)
+		}
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		if s.logger != nil {
+			s.logger.Warning("Script help cache HTTP %d", resp.StatusCode)
+		}
+		return
+	}
+	var raw map[string]ScriptHelpEntry
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		if s.logger != nil {
+			s.logger.Warning("Script help cache decode failed: %v", err)
+		}
+		return
+	}
+	entries := make([]ScriptHelpEntry, 0, len(raw))
+	for key, entry := range raw {
+		if entry.Name == "" {
+			entry.Name = key
+		}
+		entries = append(entries, entry)
+	}
+	sort.Slice(entries, func(i, j int) bool { return strings.ToLower(entries[i].Name) < strings.ToLower(entries[j].Name) })
+	s.scriptHelpMu.Lock()
+	s.scriptHelp = entries
+	s.scriptHelpReady = true
+	s.scriptHelpMu.Unlock()
+}
+
+func (p *Player) sendScriptHelp(query string) bool {
+	query = strings.TrimSpace(query)
+	if query == "" {
+		p.sendPLO_RC_CHAT("Usage: /scripthelp <name or wildcard>")
+		return true
+	}
+	p.server.scriptHelpMu.RLock()
+	ready := p.server.scriptHelpReady
+	entries := append([]ScriptHelpEntry(nil), p.server.scriptHelp...)
+	p.server.scriptHelpMu.RUnlock()
+	if !ready {
+		p.sendPLO_RC_CHAT("Script help cache is not loaded yet.")
+		return true
+	}
+	re, err := wildcardRegex(query)
+	if err != nil {
+		p.sendPLO_RC_CHAT("Invalid script help wildcard.")
+		return true
+	}
+	serverside := make([]string, 0)
+	clientside := make([]string, 0)
+	for _, entry := range entries {
+		line := entry.scriptHelpLine()
+		if line == "" || !re.MatchString(strings.ToLower(entry.Name)) {
+			continue
+		}
+		if strings.EqualFold(entry.Scope, "clientside") {
+			clientside = append(clientside, line)
+		} else {
+			serverside = append(serverside, line)
+		}
+	}
+	p.sendPLO_RC_CHAT("Script help for '" + query + "':")
+	if len(serverside) == 0 && len(clientside) == 0 {
+		p.sendPLO_RC_CHAT("No script help found.")
+		return true
+	}
+	const limit = 40
+	count := 0
+	for _, line := range serverside {
+		if count >= limit {
+			p.sendPLO_RC_CHAT("More results omitted.")
+			return true
+		}
+		p.sendPLO_RC_CHAT(line)
+		count++
+	}
+	if len(clientside) > 0 {
+		p.sendPLO_RC_CHAT("Clientside:")
+	}
+	for _, line := range clientside {
+		if count >= limit {
+			p.sendPLO_RC_CHAT("More results omitted.")
+			return true
+		}
+		p.sendPLO_RC_CHAT(line)
+		count++
+	}
+	return true
+}
+
+func wildcardRegex(query string) (*regexp.Regexp, error) {
+	pattern := "^" + strings.ReplaceAll(regexp.QuoteMeta(strings.ToLower(query)), "\\*", ".*") + "$"
+	return regexp.Compile(pattern)
+}
+
+func (e ScriptHelpEntry) scriptHelpLine() string {
+	name := strings.TrimSpace(e.Name)
+	if name == "" {
+		return ""
+	}
+	line := name
+	if strings.EqualFold(e.Type, "function") {
+		line += "(" + strings.Join(e.Params, ", ") + ")"
+	}
+	returns := strings.TrimSpace(e.Returns)
+	desc := strings.TrimSpace(e.Description)
+	if returns != "" && !strings.EqualFold(returns, "void") {
+		line += " - returns " + returns
+	}
+	if desc != "" {
+		if strings.Contains(strings.ToLower(desc), strings.ToLower(line)) {
+			return desc
+		}
+		line += " - " + desc
+	}
+	return line
+}
+
 func (p *Player) sendRCHelp() {
 	data, err := p.server.config.LoadFile("config/rchelp.txt")
 	if err != nil {
@@ -838,11 +982,25 @@ func (p *Player) sendRCHelp() {
 }
 
 func (p *Player) msgPLI_PROFILEGET(packet []byte) bool {
-	p.server.logger.Debug("PROFILEGET")
+	if p == nil || p.server == nil {
+		return true
+	}
+	payload := string(packet[1:])
+	p.server.logger.Debug("PROFILEGET: %s", payload)
+	p.server.sendPlayerTextToListservers(SVO_GETPROF, p.id, payload)
 	return true
 }
 func (p *Player) msgPLI_PROFILESET(packet []byte) bool {
-	p.server.logger.Debug("PROFILESET")
+	if p == nil || p.server == nil || len(packet) <= 1 {
+		return true
+	}
+	buf := NewBufferFromBytes(packet[1:])
+	account := string(buf.ReadBytes(int(buf.ReadByte())))
+	if !strings.EqualFold(account, p.accountName) {
+		return true
+	}
+	p.server.logger.Debug("PROFILESET: %s", account)
+	p.server.sendTextToListservers(SVO_SETPROF, string(packet[1:]))
 	return true
 }
 func (p *Player) msgPLI_RC_WARPPLAYER(packet []byte) bool {

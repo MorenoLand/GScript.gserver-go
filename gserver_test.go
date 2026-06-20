@@ -2285,12 +2285,13 @@ func TestRCLoginPayloadUsesChatForWelcomeMessages(t *testing.T) {
 	if bytes.Contains(rc.outQueue, []byte{PLO_RC_ADMINMESSAGE + 32}) {
 		t.Fatalf("rc login payload used admin-message packet: % X", rc.outQueue)
 	}
-	wantWelcome := append([]byte{PLO_RC_CHAT + 32}, []byte("Welcome")...)
+	wantWelcome := append([]byte{PLO_RC_CHAT + 32}, []byte("Welcome to the GServer for Test, type /help for a list of available commands")...)
 	wantWelcome = append(wantWelcome, '\n')
-	wantHelp := append([]byte{PLO_RC_CHAT + 32}, []byte("Say /help")...)
-	wantHelp = append(wantHelp, '\n')
-	if !bytes.Contains(rc.outQueue, wantWelcome) || !bytes.Contains(rc.outQueue, wantHelp) {
-		t.Fatalf("rc login payload missing chat welcome messages: % X", rc.outQueue)
+	if !bytes.Contains(rc.outQueue, wantWelcome) {
+		t.Fatalf("rc login payload missing combined chat welcome message: % X", rc.outQueue)
+	}
+	if bytes.Contains(rc.outQueue, []byte("Say /help\n")) {
+		t.Fatalf("rc login payload still used legacy rcmessage help line: % X", rc.outQueue)
 	}
 }
 
@@ -3621,6 +3622,30 @@ func TestServerListRefreshSettingsDoesNotSendCountedSetPlayers(t *testing.T) {
 	}
 }
 
+func TestServerListRefreshSettingsUsesRawTextSetterPackets(t *testing.T) {
+	server := &Server{
+		name:            "Orion-Go",
+		logger:          NewLogger("", false),
+		settings:        NewSettings(),
+		allowedVersions: []string{"GNW22122"},
+	}
+	server.settings.Set("name", "Orion-Go")
+	server.settings.Set("description", "Go Code GServer")
+	server.settings.Set("language", "English")
+	server.settings.Set("url", "https://github.com/MorenoLand/GScript.GServerGo")
+	server.settings.Set("serverip", "orion.moreno.land")
+	server.settings.Set("serverport", "14802")
+	sl := &ServerList{server: server, connected: true, sendQueue: make(chan []byte, 16), codec: ENCRYPT_GEN_1}
+
+	sl.refreshServerSettings()
+
+	got := <-sl.sendQueue
+	want := append([]byte{SVO_SETNAME + 32}, []byte("Orion-Go\n")...)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("SETNAME packet = % X, want % X", got, want)
+	}
+}
+
 func TestGuestLoginSendsVerifyAccount2WithIdentity(t *testing.T) {
 	server := newLoginTestServer(t)
 	writeTestFile(t, server.config.GetBasePath(), "accounts/defaultaccount.txt", ""+
@@ -3958,6 +3983,29 @@ func TestServerListSendTextPacketEncodesIDAndUsesActiveCodec(t *testing.T) {
 	want = append(want, '\n')
 	if !bytes.Equal(plain, want) {
 		t.Fatalf("decoded request list packet = % X, want % X", plain, want)
+	}
+}
+
+func TestProfilePacketsForwardToListserver(t *testing.T) {
+	server := &Server{logger: NewLogger("", false)}
+	sl := &ServerList{server: server, connected: true, sendQueue: make(chan []byte, 2)}
+	server.serverList = sl
+	server.serverLists = []*ServerList{sl}
+	player := &Player{server: server, id: 42, Account: Account{accountName: "moondeath"}}
+
+	player.msgPLI_PROFILEGET(append([]byte{PLI_PROFILEGET}, []byte("moondeath")...))
+	wantGet := append([]byte{SVO_GETPROF + 32}, NewBuffer().WriteGShort(42).Bytes()...)
+	wantGet = append(wantGet, []byte("moondeath\n")...)
+	if got := <-sl.sendQueue; !bytes.Equal(got, wantGet) {
+		t.Fatalf("profile get packet = % X, want % X", got, wantGet)
+	}
+
+	payload := NewBuffer().WriteString8("moondeath").Write([]byte("profile text")).Bytes()
+	player.msgPLI_PROFILESET(append([]byte{PLI_PROFILESET}, payload...))
+	wantSet := append([]byte{SVO_SETPROF + 32}, payload...)
+	wantSet = append(wantSet, '\n')
+	if got := <-sl.sendQueue; !bytes.Equal(got, wantSet) {
+		t.Fatalf("profile set packet = % X, want % X", got, wantSet)
 	}
 }
 
@@ -4509,6 +4557,7 @@ func TestLevelWarpParsesRestOfPacketAsLevelName(t *testing.T) {
 	level := NewLevel()
 	level.tiles[0] = &LevelTiles{width: 64, height: 64, tiles: make([]int16, 4096)}
 	server := &Server{
+		running:  true,
 		logger:   NewLogger("", false),
 		config:   NewFileSystem("."),
 		settings: NewSettings(),
@@ -4548,6 +4597,24 @@ func TestLevelWarpParsesRestOfPacketAsLevelName(t *testing.T) {
 	}
 	if !p.loaded {
 		t.Fatalf("player was not marked loaded after level warp")
+	}
+}
+
+func TestLevelWarpIgnoresInvalidShortTarget(t *testing.T) {
+	server := &Server{running: true, logger: NewLogger("", false), config: NewFileSystem("."), settings: NewSettings(), levels: map[string]*Level{}}
+	p := &Player{id: 2, server: server, encryption: *NewEncryption(), queueOutgoing: true, Account: Account{accountName: "moondeath"}}
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_LEVELWARP)
+	packet.WriteGChar(0)
+	packet.WriteGChar(220)
+	packet.Write([]byte("m"))
+
+	if !p.msgPLI_LEVELWARP(packet.Bytes()) {
+		t.Fatalf("msgPLI_LEVELWARP returned false")
+	}
+	if p.levelName != "" || len(p.outQueue) != 0 {
+		t.Fatalf("invalid warp changed player: level=%q out=% X", p.levelName, p.outQueue)
 	}
 }
 
