@@ -1801,7 +1801,7 @@ func TestNCPostLoginTailAnnouncesNewNCToOtherNCs(t *testing.T) {
 
 	nc.sendNCPostLoginTail()
 
-	want := append([]byte{PLO_RC_CHAT + 32}, []byte("New NC: *moondeath (moondeath)")...)
+	want := append([]byte{PLO_RC_CHAT + 32}, []byte("New NC: moondeath")...)
 	want = append(want, '\n')
 	if !bytes.Contains(existing.outQueue, want) {
 		t.Fatalf("existing NC did not receive new NC message: % X", existing.outQueue)

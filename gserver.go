@@ -2312,7 +2312,7 @@ func (p *Player) sendRCPostLoginTail() {
 		}
 		if other.playerType&PLTYPE_ANYNC != 0 {
 			if p.hasRight(PLPERM_NPCCONTROL) {
-				existingNC = append(existingNC, other.rcDisplayName())
+				existingNC = append(existingNC, other.ncDisplayName())
 			}
 			continue
 		}
@@ -2339,11 +2339,11 @@ func (p *Player) sendNCPostLoginTail() {
 	p.server.playerMu.RLock()
 	for _, other := range p.server.players {
 		if other != nil && other != p && other.playerType&PLTYPE_ANYNC != 0 && other.isLoggedIn() {
-			p.sendPLO_RC_CHAT("New NC: " + other.rcDisplayName())
+			p.sendPLO_RC_CHAT("New NC: " + other.ncDisplayName())
 		}
 	}
 	p.server.playerMu.RUnlock()
-	p.server.sendNCNotice("New NC: "+p.rcDisplayName(), p)
+	p.server.sendNCNotice("New NC: "+p.ncDisplayName(), p)
 }
 
 func (s *Server) configuredName() string {
@@ -2377,6 +2377,17 @@ func (p *Player) rcDisplayName() string {
 		return nick
 	}
 	return nick + " (" + account + ")"
+}
+
+func (p *Player) ncDisplayName() string {
+	if p == nil {
+		return ""
+	}
+	account := strings.TrimSpace(p.accountName)
+	if account != "" {
+		return account
+	}
+	return strings.TrimSpace(p.character.nickName)
 }
 
 func (p *Player) rcChatName() string {
