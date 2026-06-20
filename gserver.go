@@ -2357,6 +2357,17 @@ func (p *Player) rcDisplayName() string {
 	return nick + " (" + account + ")"
 }
 
+func (p *Player) rcChatName() string {
+	if p == nil {
+		return ""
+	}
+	nick := strings.TrimSpace(p.character.nickName)
+	if nick != "" {
+		return nick
+	}
+	return strings.TrimSpace(p.accountName)
+}
+
 func (p *Player) sendNCNPCList() {
 	p.server.ensureNPCServer().SendNPCList(p)
 }

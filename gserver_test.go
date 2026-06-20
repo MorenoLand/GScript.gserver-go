@@ -2317,6 +2317,26 @@ func TestRCChatRelaysToConnectedRCs(t *testing.T) {
 	}
 }
 
+func TestRCChatUsesNicknameWithoutAccountSuffix(t *testing.T) {
+	server := newLoginTestServer(t)
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.id = 2
+	rc.accountName = "moondeath"
+	rc.character.nickName = "Not Denveous"
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[rc.id] = rc
+
+	rc.msgPLI_RC_CHAT(append([]byte{PLI_RC_CHAT}, []byte("aids")...))
+
+	want := append([]byte{PLO_RC_CHAT + 32}, []byte("Not Denveous: aids")...)
+	want = append(want, '\n')
+	if !bytes.Equal(rc.outQueue, want) {
+		t.Fatalf("rc chat packet = % X, want % X", rc.outQueue, want)
+	}
+}
+
 func TestRCChatSlashHelpDoesNotEchoAsChat(t *testing.T) {
 	server := newLoginTestServer(t)
 	writeTestFile(t, server.config.GetBasePath(), "config/rchelp.txt", "/open account\n/openrights account\n")
