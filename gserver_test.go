@@ -6237,13 +6237,26 @@ func TestPlayerChatCommandSendsLocalPropsWithPacketTerminator(t *testing.T) {
 }
 
 func TestPlayerChatCommandReconnectRequestsCurrentServerInfo(t *testing.T) {
-	server := &Server{logger: NewLogger("", false), name: "Orion-Go", players: make(map[uint16]*Player), settings: NewSettings()}
+	dir := filepath.Join(".", ".codex-test-reconnect-save")
+	_ = os.RemoveAll(dir)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	server := &Server{logger: NewLogger("", false), name: "Orion-Go", players: make(map[uint16]*Player), settings: NewSettings(), config: NewFileSystem(dir)}
 	sl := &ServerList{server: server, connected: true, enabled: true, codec: ENCRYPT_GEN_1, sendQueue: make(chan []byte, 1)}
 	server.serverList = sl
 	p := NewPlayer(nil, server)
 	p.id = 321
+	p.playerType = PLTYPE_CLIENT3
 	p.queueOutgoing = true
 	p.accountName = "moondeath"
+	p.communityName = "moondeath"
+	p.character.nickName = "moondeath"
+	p.character.gani = "idle.gif"
+	p.maxHitpoints = 3
+	p.character.hitpoints = 3
+	p.levelName = "inside house.nw"
+	p.setX(44)
+	p.setY(45.5)
+	p.flagList = make(map[string]string)
 	packet := NewBuffer()
 	packet.WriteByte(PLI_PLAYERPROPS)
 	packet.WriteGChar(PLPROP_CURCHAT).WriteGChar(byte(len("/reconnect"))).Write([]byte("/reconnect"))
@@ -6254,6 +6267,15 @@ func TestPlayerChatCommandReconnectRequestsCurrentServerInfo(t *testing.T) {
 	want := NewBuffer().WriteGChar(SVO_SERVERINFO).WriteGShort(321).Write([]byte("Orion-Go")).WriteByte('\n').Bytes()
 	if !bytes.Equal(got, want) {
 		t.Fatalf("reconnect listserver request = % X, want % X", got, want)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "accounts", "moondeath.txt"))
+	if err != nil {
+		t.Fatalf("read saved account: %v", err)
+	}
+	for _, want := range []string{"LEVEL inside house.nw\r\n", "X 44.00\r\n", "Y 45.50\r\n"} {
+		if !bytes.Contains(data, []byte(want)) {
+			t.Fatalf("saved account missing %q:\n%s", want, data)
+		}
 	}
 }
 
@@ -6276,6 +6298,68 @@ func TestPlayerChatCommandReconnectFallsBackToLocalServerWarp(t *testing.T) {
 	want = append(want, '\n')
 	if !bytes.Contains(p.outQueue, want) {
 		t.Fatalf("reconnect fallback missing % X in % X", want, p.outQueue)
+	}
+}
+
+func TestPlayerChatSetAllColorsUsesClassicColorIndex(t *testing.T) {
+	server := &Server{logger: NewLogger("", false), players: make(map[uint16]*Player), settings: NewSettings()}
+	p := NewPlayer(nil, server)
+	p.id = 1
+	p.queueOutgoing = true
+	p.accountName = "moondeath"
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_CURCHAT).WriteGChar(byte(len("setall pink"))).Write([]byte("setall pink"))
+	if !p.msgPLI_PLAYERPROPS(packet.Bytes()) {
+		t.Fatal("msgPLI_PLAYERPROPS returned false")
+	}
+	if p.character.colors != [5]uint8{3, 3, 3, 3, 3} {
+		t.Fatalf("colors = %v, want all pink index 3", p.character.colors)
+	}
+	wantColors := []byte{PLO_PLAYERPROPS + 32, PLPROP_COLORS + 32, 35, 35, 35, 35, 35}
+	if !bytes.Contains(p.outQueue, wantColors) {
+		t.Fatalf("local color props missing % X in % X", wantColors, p.outQueue)
+	}
+	wantChat := []byte{PLPROP_CURCHAT + 32, 32, '\n'}
+	if !bytes.Contains(p.outQueue, wantChat) {
+		t.Fatalf("local chat clear missing % X in % X", wantChat, p.outQueue)
+	}
+}
+
+func TestPlayerChatSetShieldUsesShieldCategoryOnly(t *testing.T) {
+	dir := filepath.Join(".", ".codex-test-setshield-category")
+	_ = os.RemoveAll(dir)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	server := &Server{logger: NewLogger("", false), players: make(map[uint16]*Player), settings: NewSettings(), config: NewFileSystem(dir)}
+	if err := server.config.SaveFile("world/pics1.png", []byte("tiles")); err != nil {
+		t.Fatalf("write tileset: %v", err)
+	}
+	if err := server.config.SaveFile("world/shields/shield1.png", []byte("shield")); err != nil {
+		t.Fatalf("write shield: %v", err)
+	}
+	p := NewPlayer(nil, server)
+	p.id = 1
+	p.queueOutgoing = true
+	p.accountName = "moondeath"
+
+	bad := NewBuffer()
+	bad.WriteByte(PLI_PLAYERPROPS)
+	bad.WriteGChar(PLPROP_CURCHAT).WriteGChar(byte(len("setshield pics1.png"))).Write([]byte("setshield pics1.png"))
+	if !p.msgPLI_PLAYERPROPS(bad.Bytes()) {
+		t.Fatal("msgPLI_PLAYERPROPS bad returned false")
+	}
+	if p.character.shieldImage != "" {
+		t.Fatalf("shieldImage = %q, want unchanged", p.character.shieldImage)
+	}
+
+	good := NewBuffer()
+	good.WriteByte(PLI_PLAYERPROPS)
+	good.WriteGChar(PLPROP_CURCHAT).WriteGChar(byte(len("setshield shield1"))).Write([]byte("setshield shield1"))
+	if !p.msgPLI_PLAYERPROPS(good.Bytes()) {
+		t.Fatal("msgPLI_PLAYERPROPS good returned false")
+	}
+	if p.character.shieldImage != "shield1.png" {
+		t.Fatalf("shieldImage = %q, want shield1.png", p.character.shieldImage)
 	}
 }
 

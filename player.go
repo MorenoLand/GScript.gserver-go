@@ -59,7 +59,7 @@ func (p *Player) handlePlayerChatCommand(chat string) bool {
 		return p.handlePlayerChatSetSword(words)
 	case "setshield":
 		return p.handlePlayerChatSetShield(words)
-	case "setskin", "setcoat", "setsleeves", "setshoes", "setbelt":
+	case "setskin", "setcoat", "setsleeves", "setshoes", "setbelt", "setall":
 		return p.handlePlayerChatSetColor(command, words)
 	case "warpto":
 		return p.handlePlayerChatWarpto(words)
@@ -107,6 +107,10 @@ func (p *Player) handlePlayerChatReconnect() bool {
 		p.setChat("(server name is not set)")
 		return true
 	}
+	if p.shouldSavePlayerAccount() {
+		p.SaveAccount()
+		p.lastSave = time.Now()
+	}
 	p.clearChatWithProps()
 	if !p.server.sendPlayerTextToListservers(SVO_SERVERINFO, p.id, serverName) {
 		ip := strings.TrimSpace(p.server.settings.Get("serverip"))
@@ -142,7 +146,11 @@ func (p *Player) handlePlayerChatSetHead(words []string) bool {
 	if len(words) != 2 || !p.server.settings.GetBool("setheadallowed", true) {
 		return false
 	}
-	p.character.headImage = words[1]
+	fileName, ok := p.resolvePlayerAsset("heads", words[1], []string{".png", ".mng", ".gif"})
+	if !ok {
+		return true
+	}
+	p.character.headImage = fileName
 	p.clearChatWithProps(PLPROP_HEADGIF)
 	return true
 }
@@ -151,7 +159,11 @@ func (p *Player) handlePlayerChatSetBody(words []string) bool {
 	if len(words) != 2 || !p.server.settings.GetBool("setbodyallowed", true) {
 		return false
 	}
-	p.character.bodyImage = words[1]
+	fileName, ok := p.resolvePlayerAsset("bodies", words[1], []string{".png", ".mng", ".gif"})
+	if !ok {
+		return true
+	}
+	p.character.bodyImage = fileName
 	p.clearChatWithProps(PLPROP_BODYIMG)
 	return true
 }
@@ -160,7 +172,11 @@ func (p *Player) handlePlayerChatSetSword(words []string) bool {
 	if len(words) != 2 || !p.server.settings.GetBool("setswordallowed", true) {
 		return false
 	}
-	p.character.swordImage = words[1]
+	fileName, ok := p.resolvePlayerAsset("swords", words[1], []string{".png", ".mng", ".gif"})
+	if !ok {
+		return true
+	}
+	p.character.swordImage = fileName
 	p.clearChatWithProps(PLPROP_SWORDPOWER)
 	return true
 }
@@ -169,7 +185,11 @@ func (p *Player) handlePlayerChatSetShield(words []string) bool {
 	if len(words) != 2 || !p.server.settings.GetBool("setshieldallowed", true) {
 		return false
 	}
-	p.character.shieldImage = words[1]
+	fileName, ok := p.resolvePlayerAsset("shields", words[1], []string{".png", ".mng", ".gif"})
+	if !ok {
+		return true
+	}
+	p.character.shieldImage = fileName
 	p.clearChatWithProps(PLPROP_SHIELDPOWER)
 	return true
 }
@@ -186,10 +206,58 @@ func (p *Player) handlePlayerChatSetColor(command string, words []string) bool {
 	if !ok {
 		return true
 	}
-	colorSlot := map[string]int{"setskin": 0, "setcoat": 1, "setsleeves": 2, "setshoes": 3, "setbelt": 4}[command]
-	p.character.colors[colorSlot] = color
+	if command == "setall" {
+		for i := range p.character.colors {
+			p.character.colors[i] = color
+		}
+	} else {
+		colorSlot := map[string]int{"setskin": 0, "setcoat": 1, "setsleeves": 2, "setshoes": 3, "setbelt": 4}[command]
+		p.character.colors[colorSlot] = color
+	}
 	p.clearChatWithProps(PLPROP_COLORS)
 	return true
+}
+
+func (p *Player) resolvePlayerAsset(category, requested string, extensions []string) (string, bool) {
+	fileName := strings.TrimSpace(filepath.ToSlash(requested))
+	if fileName == "" || strings.Contains(fileName, "/") || strings.Contains(fileName, "\\") {
+		return "", false
+	}
+	if isDefaultPlayerAsset(category, fileName) {
+		return fileName, true
+	}
+	if p.server == nil || p.server.config == nil {
+		return "", false
+	}
+	if p.server.config.FileExists(category + "/" + fileName) {
+		return fileName, true
+	}
+	if filepath.Ext(fileName) == "" {
+		for _, ext := range extensions {
+			candidate := fileName + ext
+			if isDefaultPlayerAsset(category, candidate) || p.server.config.FileExists(category+"/"+candidate) {
+				return candidate, true
+			}
+		}
+	}
+	return "", false
+}
+
+func isDefaultPlayerAsset(category, fileName string) bool {
+	base := strings.ToLower(filepath.Base(filepath.ToSlash(fileName)))
+	patterns := map[string][]string{
+		"heads":   {"head*.png", "head*.gif"},
+		"bodies":  {"body.png", "body2.png", "body3.png"},
+		"swords":  {"sword?.png", "sword?.gif"},
+		"shields": {"shield?.png", "shield?.gif"},
+	}
+	for _, pattern := range patterns[category] {
+		matched, err := filepath.Match(pattern, base)
+		if err == nil && matched {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Player) handlePlayerChatWarpto(words []string) bool {
@@ -405,7 +473,7 @@ func (p *Player) sendPlayerPropChanges(propIds ...int) {
 }
 
 func graalColor(name string) (byte, bool) {
-	colors := map[string]byte{"orange": 0, "white": 1, "blue": 2, "red": 3, "black": 4, "lightblue": 5, "green": 6, "yellow": 7, "pink": 8, "gray": 9, "brown": 10, "darkred": 11, "darkgreen": 12, "darkblue": 13, "purple": 14, "darkgray": 15, "cyan": 16}
+	colors := map[string]byte{"white": 0, "yellow": 1, "orange": 2, "pink": 3, "red": 4, "darkred": 5, "lightgreen": 6, "green": 7, "darkgreen": 8, "lightblue": 9, "blue": 10, "darkblue": 11, "brown": 12, "cynober": 13, "purple": 14, "darkpurple": 15, "lightgray": 16, "gray": 17, "black": 18, "transparent": 19}
 	color, ok := colors[name]
 	return color, ok
 }
