@@ -6008,6 +6008,11 @@ func TestPlayerChatCommandWarptoXYAndLevel(t *testing.T) {
 	if !bytes.Contains(p.outQueue, []byte{PLO_PLAYERPROPS + 32, PLPROP_CURCHAT + 32, 32, PLPROP_X + 32, byte(14 + 32), PLPROP_Y + 32, byte(16 + 32)}) {
 		t.Fatalf("self warpto props missing from % X", p.outQueue)
 	}
+	wantSelfOther := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(p.id).Bytes()...)
+	wantSelfOther = append(wantSelfOther, PLPROP_CURCHAT+32, 32, PLPROP_X+32, byte(14+32), PLPROP_Y+32, byte(16+32))
+	if !bytes.Contains(p.outQueue, wantSelfOther) {
+		t.Fatalf("self warpto other-player props missing % X from % X", wantSelfOther, p.outQueue)
+	}
 
 	packet = NewBuffer()
 	packet.WriteByte(PLI_PLAYERPROPS)
@@ -6180,6 +6185,12 @@ func TestPlayerChatCommandSetNickBroadcastsNicknameProp(t *testing.T) {
 	wantSelf := append([]byte{PLO_PLAYERPROPS + 32, PLPROP_NICKNAME + 32, 8 + 32}, []byte("Denveous")...)
 	if !bytes.Contains(p.outQueue, wantSelf) {
 		t.Fatalf("self nickname prop missing % X in % X", wantSelf, p.outQueue)
+	}
+	wantSelfOther := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(p.id).Bytes()...)
+	wantSelfOther = append(wantSelfOther, PLPROP_NICKNAME+32, 8+32)
+	wantSelfOther = append(wantSelfOther, []byte("Denveous")...)
+	if !bytes.Contains(p.outQueue, wantSelfOther) {
+		t.Fatalf("self other-player nickname prop missing % X in % X", wantSelfOther, p.outQueue)
 	}
 	wantOther := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(p.id).Bytes()...)
 	wantOther = append(wantOther, PLPROP_NICKNAME+32, 8+32)

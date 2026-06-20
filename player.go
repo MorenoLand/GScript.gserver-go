@@ -369,7 +369,23 @@ func (p *Player) sendPlayerPropChanges(propIds ...int) {
 	if len(selfProps) > 0 {
 		p.sendPacket(append([]byte{PLO_PLAYERPROPS}, selfProps...))
 	}
+	p.sendOwnOtherPlayerPropDeltas(common.Bytes(), legacy.Bytes(), precise.Bytes())
 	p.sendPlayerPropDeltasToCurrentLevel(common.Bytes(), legacy.Bytes(), precise.Bytes())
+}
+
+func (p *Player) sendOwnOtherPlayerPropDeltas(common, legacyMove, preciseMove []byte) {
+	moveProps := legacyMove
+	if playerSupportsPreciseMovement(p) {
+		moveProps = preciseMove
+	}
+	if len(common) == 0 && len(moveProps) == 0 {
+		return
+	}
+	out := NewBuffer()
+	out.WriteByte(PLO_OTHERPLPROPS).WriteGShort(p.id)
+	out.Write(common)
+	out.Write(moveProps)
+	p.sendPacket(append(out.Bytes(), '\n'))
 }
 
 func graalColor(name string) (byte, bool) {
