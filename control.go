@@ -792,7 +792,7 @@ func (p *Player) msgPLI_RC_CHAT(packet []byte) bool {
 	if strings.HasPrefix(message, "/") {
 		return p.handleRCCommand(message)
 	}
-	p.server.sendRCChat(p.accountName + ": " + message)
+	p.server.sendRCChat(p.rcDisplayName() + ": " + message)
 	return true
 }
 

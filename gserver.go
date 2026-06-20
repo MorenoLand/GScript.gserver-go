@@ -2349,7 +2349,7 @@ func (p *Player) rcDisplayName() string {
 		return account
 	}
 	if strings.EqualFold(nick, account) {
-		return "*" + account
+		return "*" + account + " (" + account + ")"
 	}
 	if account == "" {
 		return nick
@@ -2955,6 +2955,7 @@ func (p *Player) handleLogin(packet []byte) bool {
 		p.server.logger.Error("Failed to load account for: %s", account)
 		return false
 	}
+	p.normalizeNickname()
 	p.applyServerOptionsStaffRights()
 	if p.conn != nil {
 		p.setAccountIPFromRemoteAddr(p.conn.RemoteAddr())
@@ -4166,7 +4167,15 @@ func (p *Player) setNickname(v string) {
 		v = v[:223]
 	}
 	p.character.nickName = v
-	p.guild = parseNicknameGuild(v)
+	p.normalizeNickname()
+	p.guild = parseNicknameGuild(p.character.nickName)
+}
+func (p *Player) normalizeNickname() {
+	account := strings.TrimSpace(p.accountName)
+	nick := strings.TrimSpace(p.character.nickName)
+	if account != "" && strings.EqualFold(nick, account) {
+		p.character.nickName = "*" + account
+	}
 }
 func (p *Player) setAccountName(v string) { p.accountName = v }
 func (p *Player) getAccountName() string  { return p.accountName }
@@ -4574,7 +4583,7 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 		case PLPROP_NICKNAME:
 			val := buf.ReadGCharString()
 			if val != "" && val != "unknown" {
-				p.character.nickName = val
+				p.setNickname(val)
 			}
 		case PLPROP_MAXPOWER:
 			p.maxHitpoints = buf.ReadGChar()

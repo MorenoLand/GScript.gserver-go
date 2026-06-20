@@ -1734,7 +1734,7 @@ func TestNCPostLoginTailAnnouncesNewNCToOtherNCs(t *testing.T) {
 
 	nc.sendNCPostLoginTail()
 
-	want := append([]byte{PLO_RC_CHAT + 32}, []byte("New NC: *moondeath")...)
+	want := append([]byte{PLO_RC_CHAT + 32}, []byte("New NC: *moondeath (moondeath)")...)
 	want = append(want, '\n')
 	if !bytes.Contains(existing.outQueue, want) {
 		t.Fatalf("existing NC did not receive new NC message: % X", existing.outQueue)
@@ -5434,6 +5434,27 @@ func TestPlayerPropsParsesTypedClientPropertyStream(t *testing.T) {
 	}
 	if p.levelName != "onlinestartlocal.nw" {
 		t.Fatalf("levelName = %q, want onlinestartlocal.nw", p.levelName)
+	}
+}
+
+func TestPlayerNicknamePropForcesAccountNicknameStarPrefix(t *testing.T) {
+	p := &Player{
+		server: &Server{logger: NewLogger("", false)},
+	}
+	p.accountName = "moondeath"
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_NICKNAME).WriteGChar(byte(len("moondeath"))).Write([]byte("moondeath"))
+
+	if !p.msgPLI_PLAYERPROPS(packet.Bytes()) {
+		t.Fatalf("msgPLI_PLAYERPROPS returned false")
+	}
+	if p.character.nickName != "*moondeath" {
+		t.Fatalf("nickname = %q, want *moondeath", p.character.nickName)
+	}
+	if got := string(p.getProp(PLPROP_NICKNAME)); !strings.Contains(got, "*moondeath") {
+		t.Fatalf("nickname prop = %q, want forced nickname", got)
 	}
 }
 
