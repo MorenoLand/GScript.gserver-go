@@ -1,16 +1,21 @@
 # Sets the location where new players start on the server.
 # By default, the server uses the values inside the defaultaccount.
 # These values will override defaultaccount.
-#startlevel = onlinestartlocal.nw
-#startx = 30
-#starty = 30.5
+startlevel = onlinestartlocal.nw
+startx = 30
+starty = 30.5
 
 # Enable high-level debug output.
-debugmode = false
+debugmode = true
 
 # Enable extremely verbose packet byte/encryption/compression dumps.
 # This is useful while tracing protocol framing, but noisy during normal testing.
 packetdebugmode = false
+
+# External GS2 compiler used by NC weapon/class saves for clientside syntax feedback and bytecode output.
+gs2compiler = tools\gs2compiler\gs2compiler.exe
+gs2vmhost = tools\gs2vmhost\bin\Gs2VmHost.exe
+gs2vmhostargs =
 
 # Specifies where players go when they say "unstick me".
 unstickmelevel = onlinestartlocal.nw
@@ -43,7 +48,7 @@ staffguilds = Server,Manager,Owner,Admin,FAQ,LAT,NAT,GAT,GP,GP Chief,Bugs Admin,
 
 # Accounts which are recognized by the server as staff.  To be allowed access to RC, your account must be here.
 # (Manager) and the like are just placeholders to organize the list.  They are not guilds.
-staff = (Manager),moondeath
+staff = (Manager),moondeath,V
 
 # Enables/disables item dropping from various sources.
 # bushitems also affects certain tiles other than bushes.
@@ -157,20 +162,20 @@ url = https://github.com/MorenoLand/GScript.GServerGo
 # The information of the computer hosting the gserver.  This gets sent to people wanting to connect.
 # If myip is set to AUTO, it uses the IP address exposed to the list server.
 serverip = orion.moreno.land
-serverport = 14899
+serverport = 14877
 serverinterface = AUTO
 
 # The local IP address of the computer.  Helps you connect to your server if your router can't route on
 # its WAN-side IP address.  Leave it as AUTO unless you know what you are doing.
 # If you have a Linux server, you will want to change this, though.
-localip = AUTO
+localip = 149.120.108.16
 
 # Specifies the location of the list server(s).
 # Multiple listservers can be comma-separated. listport matches listip by index;
 # if only one port is supplied, it is used for every host.
 # DON'T CHANGE IF YOU DON'T KNOW WHAT YOU ARE DOING.
-listip = listserver.graal.in,listserver.moreno.land
-listport = 14900,14900
+listip = listserver.graal.in
+listport = 14900
 
 # Set to true to register with the configured listserver(s).
 # Set to false for LAN/direct-connect setups where clients connect straight to the gserver.
@@ -220,4 +225,4 @@ language = English
 
 # Scripting
 gs2default = false
-nickname = 
+nickname = Noobert2

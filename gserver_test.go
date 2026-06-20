@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net"
@@ -145,6 +147,116 @@ func TestGS2CompilerHelperProcess(t *testing.T) {
 		os.Exit(2)
 	}
 	os.Exit(0)
+}
+
+func TestGS2VMHostHelperProcess(t *testing.T) {
+	if os.Getenv("GO_WANT_GS2VM_HELPER_PROCESS") != "1" {
+		return
+	}
+	if len(os.Args) < 5 {
+		fmt.Fprintln(os.Stderr, "missing vm args")
+		os.Exit(2)
+	}
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if strings.Contains(string(data), "triggerclient") {
+		fmt.Fprintln(os.Stdout, "TRIGGERCLIENT\tweapon\ttest\tkek")
+		os.Exit(0)
+	}
+	if strings.Contains(string(data), "serverr.poopybutthole") {
+		flags := map[string]string{}
+		options := map[string]string{}
+		if raw := os.Getenv("GS2_SERVER_FLAGS"); raw != "" {
+			decoded, _ := base64.StdEncoding.DecodeString(raw)
+			_ = json.Unmarshal(decoded, &flags)
+		}
+		if raw := os.Getenv("GS2_SERVER_OPTIONS"); raw != "" {
+			decoded, _ := base64.StdEncoding.DecodeString(raw)
+			_ = json.Unmarshal(decoded, &options)
+		}
+		fmt.Printf("ECHO\t%s:%s\n", flags["serverr.poopybutthole"], options["staff"])
+		os.Exit(0)
+	}
+	fmt.Printf("ECHO\t%s:%s:%s:%s\n", os.Args[len(os.Args)-3], os.Args[len(os.Args)-2], os.Args[len(os.Args)-1], strings.TrimSpace(string(data)))
+	os.Exit(0)
+}
+
+func TestRunServerSideGS2UsesConfiguredHostAndStripsClientsideBlock(t *testing.T) {
+	t.Setenv("GO_WANT_GS2VM_HELPER_PROCESS", "1")
+	server := &Server{logger: NewLogger("", false), settings: NewSettings()}
+	server.settings.Set("gs2vmhost", os.Args[0])
+	server.settings.Set("gs2vmhostargs", "-test.run=TestGS2VMHostHelperProcess --")
+
+	result := server.runServerSideGS2("weapon", "test", "onCreated", "function onCreated(){ echo(\"server\"); }\n//#CLIENTSIDE\nfunction onCreated(){ echo(\"client\"); }")
+
+	if result.err != "" {
+		t.Fatalf("runServerSideGS2 err = %q", result.err)
+	}
+	if len(result.output) != 1 || !strings.Contains(result.output[0], "weapon:test:onCreated:function onCreated(){ echo(\"server\"); }") {
+		t.Fatalf("runServerSideGS2 output = %#v", result.output)
+	}
+	if strings.Contains(result.output[0], "client") {
+		t.Fatalf("runServerSideGS2 sent clientside block: %q", result.output[0])
+	}
+}
+
+func TestRunServerSideGS2ExportsServerFlagsAndOptions(t *testing.T) {
+	t.Setenv("GO_WANT_GS2VM_HELPER_PROCESS", "1")
+	server := &Server{logger: NewLogger("", false), settings: NewSettings(), flags: map[string]string{"serverr.poopybutthole": "true"}}
+	server.settings.Set("gs2vmhost", os.Args[0])
+	server.settings.Set("gs2vmhostargs", "-test.run=TestGS2VMHostHelperProcess --")
+	server.settings.Set("staff", "(Manager) moondeath")
+
+	result := server.runServerSideGS2("weapon", "test", "onCreated", "function onCreated(){ echo(serverr.poopybutthole SPC serveroptions.staff); }")
+
+	if result.err != "" {
+		t.Fatalf("runServerSideGS2 err = %q", result.err)
+	}
+	if len(result.output) != 1 || result.output[0] != "true:(Manager) moondeath" {
+		t.Fatalf("runServerSideGS2 output = %#v", result.output)
+	}
+}
+
+func TestTriggerActionServersideWeaponSendsTriggerClient(t *testing.T) {
+	t.Setenv("GO_WANT_GS2VM_HELPER_PROCESS", "1")
+	server := &Server{
+		logger:          NewLogger("", false),
+		settings:        NewSettings(),
+		players:         make(map[uint16]*Player),
+		levels:          make(map[string]*Level),
+		weapons:         make(map[string]*Weapon),
+		triggerCommands: make(map[string]func(*Player, []string) bool),
+	}
+	server.settings.Set("gs2vmhost", os.Args[0])
+	server.settings.Set("gs2vmhostargs", "-test.run=TestGS2VMHostHelperProcess --")
+	server.initTriggerCommands()
+	server.AddWeapon(&Weapon{name: "test", script: "function onActionServerSide() { triggerclient(\"weapon\", name, \"kek\"); }\n//#CLIENTSIDE\nfunction onActionClientSide() {}"})
+	player := NewPlayer(nil, server)
+	player.id = 4
+	player.playerType = PLTYPE_CLIENT3
+	player.accountName = "moondeath"
+	player.queueOutgoing = true
+	player.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[player.id] = player
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_TRIGGERACTION)
+	packet.WriteGInt(0)
+	packet.WriteGChar(0)
+	packet.WriteGChar(0)
+	packet.Write([]byte("serverside,test,1"))
+
+	if !player.msgPLI_TRIGGERACTION(packet.Bytes()) {
+		t.Fatalf("msgPLI_TRIGGERACTION returned false")
+	}
+	want := NewBuffer()
+	want.WriteByte(PLO_TRIGGERACTION + 32).WriteGShort(0).WriteGInt(0).WriteGChar(0).WriteGChar(0).Write([]byte("clientside,weapon,test,kek"))
+	if !bytes.Contains(player.outQueue, want.Bytes()) {
+		t.Fatalf("triggerclient packet missing: % X want % X", player.outQueue, want.Bytes())
+	}
 }
 
 func TestNewServerCreatesNPCServerRuntime(t *testing.T) {
@@ -1587,6 +1699,26 @@ func TestRCPostLoginTailIncludesNPCServerWithoutSocket(t *testing.T) {
 	}
 }
 
+func TestNCPostLoginTailDoesNotEchoOwnNewNC(t *testing.T) {
+	server := newLoginTestServer(t)
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2 | PLTYPE_NC
+	rc.id = 2
+	rc.accountName = "moondeath"
+	rc.character.nickName = "*moondeath"
+	rc.loaded = true
+	rc.queueOutgoing = true
+	rc.adminRights = PLPERM_NPCCONTROL
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[rc.id] = rc
+
+	rc.sendNCPostLoginTail()
+
+	if bytes.Count(rc.outQueue, []byte("New NC:")) != 0 {
+		t.Fatalf("own NC notice was echoed to connector: %q", string(rc.outQueue))
+	}
+}
+
 func TestRCPlayerPropsSetUpdatesTargetFromLegacyPacket(t *testing.T) {
 	server := newLoginTestServer(t)
 	rc := NewPlayer(nil, server)
@@ -1993,6 +2125,24 @@ func TestRCPlayerPropsGet3ParsesString8AccountName(t *testing.T) {
 
 	if !bytes.Contains(rc.outQueue, []byte("moondeath")) || !bytes.Contains(rc.outQueue, append([]byte{PLPROP_KILLSCOUNT + 32}, NewBuffer().WriteGInt(7).Bytes()...)) {
 		t.Fatalf("player props by account response missing loaded account data: % X", rc.outQueue)
+	}
+}
+
+func TestRCOpenOfflineMissingAccountSendsMessage(t *testing.T) {
+	server := newLoginTestServer(t)
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.accountName = "Admin"
+	rc.adminRights = PLPERM_VIEWATTRIBUTES | PLPERM_SETRIGHTS
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+
+	rc.msgPLI_RC_PLAYERPROPSGET3(append([]byte{PLI_RC_PLAYERPROPSGET3}, NewBuffer().WriteString8Encoded("missing").Bytes()...))
+	rc.msgPLI_RC_PLAYERRIGHTSGET(rcCommandAccountPacket("missing"))
+	rc.msgPLI_RC_PLAYERCOMMENTSGET(rcCommandAccountPacket("missing"))
+
+	if got := bytes.Count(rc.outQueue, []byte("Server: Account missing does not exist.")); got != 3 {
+		t.Fatalf("missing account messages = %d, want 3; out=%q", got, rc.outQueue)
 	}
 }
 

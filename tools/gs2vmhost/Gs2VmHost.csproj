@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+	<PropertyGroup>
+		<OutputType>Exe</OutputType>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+		<LangVersion>latest</LangVersion>
+		<GS2EngineProject Condition="'$(GS2EngineProject)' == ''">G:\Development\C#\Preagonal.Scripting.GS2Engine\Preagonal.Scripting.GS2Engine\Preagonal.Scripting.GS2Engine.csproj</GS2EngineProject>
+	</PropertyGroup>
+	<ItemGroup>
+		<ProjectReference Include="$(GS2EngineProject)" />
+		<PackageReference Include="GS2Compiler" Version="1.1.4" />
+	</ItemGroup>
+</Project>

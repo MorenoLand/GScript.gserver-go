@@ -591,18 +591,30 @@ func (p *Player) msgPLI_RC_PLAYERPROPSGET2(packet []byte) bool {
 	p.server.sendRCChat(p.accountName + " has opened the attributes of " + targetPlayer.accountName)
 	return true
 }
+
+func (p *Player) loadOfflineRCAccount(accountName string) (*Player, bool) {
+	accountName = strings.TrimSpace(accountName)
+	if accountName == "" || strings.ContainsAny(accountName, `/\`) || !p.server.accountExists(accountName) {
+		p.sendPLO_RC_CHAT("Server: Account " + accountName + " does not exist.")
+		return nil, false
+	}
+	tempPlayer := NewPlayer(nil, p.server)
+	if !tempPlayer.LoadAccount(accountName, false) {
+		p.sendPLO_RC_CHAT("Server: Account " + accountName + " does not exist.")
+		return nil, false
+	}
+	return tempPlayer, true
+}
+
 func (p *Player) msgPLI_RC_PLAYERPROPSGET3(packet []byte) bool {
 	accountName := readRCString8AccountPayload(packet, PLI_RC_PLAYERPROPSGET3)
 	targetPlayer := p.server.getPlayerByAccount(accountName, PLTYPE_ANYPLAYER|PLTYPE_NPCSERVER)
 	if targetPlayer == nil {
-		if !p.server.accountExists(accountName) {
+		var ok bool
+		targetPlayer, ok = p.loadOfflineRCAccount(accountName)
+		if !ok {
 			return true
 		}
-		tempPlayer := NewPlayer(nil, p.server)
-		if !tempPlayer.LoadAccount(accountName, false) {
-			return true
-		}
-		targetPlayer = tempPlayer
 	}
 	if p.playerType != PLTYPE_RC && p.playerType != PLTYPE_RC2 && p.playerType != PLTYPE_ANYRC {
 		p.server.logger.Warning("[Hack] %s attempted PLAYERPROPSGET3 (non-RC)", p.accountName)
@@ -700,14 +712,11 @@ func (p *Player) msgPLI_RC_ACCOUNTGET(packet []byte) bool {
 	}
 	targetPlayer := p.server.getPlayerByAccount(accountName, PLTYPE_ANYCLIENT)
 	if targetPlayer == nil {
-		if !p.server.accountExists(accountName) {
+		var ok bool
+		targetPlayer, ok = p.loadOfflineRCAccount(accountName)
+		if !ok {
 			return true
 		}
-		tempPlayer := NewPlayer(nil, p.server)
-		if !tempPlayer.LoadAccount(accountName, false) {
-			return true
-		}
-		targetPlayer = tempPlayer
 	}
 	buf2 := NewBuffer()
 	buf2.WriteByte(PLO_RC_ACCOUNTGET)
@@ -761,14 +770,11 @@ func (p *Player) msgPLI_RC_ACCOUNTSET(packet []byte) bool {
 	banReason := readRCEncodedString(buf)
 	targetPlayer := p.server.getPlayerByAccount(accountName, PLTYPE_ANYCLIENT)
 	if targetPlayer == nil {
-		if !p.server.accountExists(accountName) {
+		var ok bool
+		targetPlayer, ok = p.loadOfflineRCAccount(accountName)
+		if !ok {
 			return true
 		}
-		tempPlayer := NewPlayer(nil, p.server)
-		if !tempPlayer.LoadAccount(accountName, false) {
-			return true
-		}
-		targetPlayer = tempPlayer
 	}
 	targetPlayer.email = email
 	targetPlayer.isLoadOnly = loadOnly
@@ -1121,14 +1127,11 @@ func (p *Player) msgPLI_RC_PLAYERRIGHTSGET(packet []byte) bool {
 	}
 	targetPlayer := p.server.getPlayerByAccount(accountName, PLTYPE_ANYPLAYER|PLTYPE_NPCSERVER)
 	if targetPlayer == nil {
-		if !p.server.accountExists(accountName) {
+		var ok bool
+		targetPlayer, ok = p.loadOfflineRCAccount(accountName)
+		if !ok {
 			return true
 		}
-		tempPlayer := NewPlayer(nil, p.server)
-		if !tempPlayer.LoadAccount(accountName, false) {
-			return true
-		}
-		targetPlayer = tempPlayer
 	}
 	folders := gtokenizeText(strings.Join(targetPlayer.folderList, "\n"))
 	buf2 := NewBuffer()
@@ -1284,14 +1287,11 @@ func (p *Player) msgPLI_RC_PLAYERCOMMENTSGET(packet []byte) bool {
 	accountName := readRCAccountPayload(packet, PLI_RC_PLAYERCOMMENTSGET)
 	targetPlayer := p.server.getPlayerByAccount(accountName, PLTYPE_ANYCLIENT)
 	if targetPlayer == nil {
-		if !p.server.accountExists(accountName) {
+		var ok bool
+		targetPlayer, ok = p.loadOfflineRCAccount(accountName)
+		if !ok {
 			return true
 		}
-		tempPlayer := NewPlayer(nil, p.server)
-		if !tempPlayer.LoadAccount(accountName, false) {
-			return true
-		}
-		targetPlayer = tempPlayer
 	}
 	buf2 := NewBuffer()
 	buf2.WriteByte(PLO_RC_PLAYERCOMMENTSGET)

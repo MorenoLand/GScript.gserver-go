@@ -157,8 +157,12 @@ func (l *Logger) Close() error {
 func (l *Logger) Write(format string, args ...interface{}) {
 	message := fmt.Sprintf(format, args...)
 	message = strings.TrimRight(message, "\n")
-	timestamp := time.Now().Format("[03:04 PM]")
-	fullMessage := fmt.Sprintf("%s %s%s\n", timestamp, l.prefix, message)
+	lines := strings.Split(message, "\n")
+	var builder strings.Builder
+	for _, line := range lines {
+		builder.WriteString(fmt.Sprintf("%s %s%s\n", time.Now().Format("[03:04 PM]"), l.prefix, line))
+	}
+	fullMessage := builder.String()
 	fmt.Print(fullMessage)
 	l.mu.Lock()
 	defer l.mu.Unlock()

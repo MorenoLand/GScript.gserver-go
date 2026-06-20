@@ -455,6 +455,7 @@ func (p *Player) msgPLI_NC_WEAPONADD(packet []byte) bool {
 		if err := p.server.saveWeaponFile(weapon); err != nil {
 			p.server.logger.Warning("Failed to save weapon %s: %v", weaponName, err)
 		}
+		p.server.runServerSideWeaponEvent(weapon, "onCreated")
 		logMsg := fmt.Sprintf("Weapon/GUI-script %s %s by %s", weaponName, actionTaken, p.accountName)
 		p.server.logger.Info(logMsg)
 		p.server.sendToNC(logMsg)

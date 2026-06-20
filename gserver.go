@@ -1155,6 +1155,16 @@ func (s *Server) accountExists(accountName string) bool {
 }
 
 func (s *Server) initTriggerCommands() {
+	s.triggerCommands["serverside"] = func(p *Player, args []string) bool {
+		if len(args) < 2 {
+			return true
+		}
+		weapon := s.GetWeapon(strings.TrimSpace(args[1]))
+		if weapon != nil {
+			s.runServerSideWeaponEventForPlayer(weapon, "onActionServerSide", p, args[2:]...)
+		}
+		return true
+	}
 	s.triggerCommands["gr.addweapon"] = func(p *Player, args []string) bool {
 		if !s.settings.GetBool("triggerhack_weapons", false) {
 			return true
@@ -1309,6 +1319,7 @@ func (s *Server) initTriggerCommands() {
 }
 
 func (s *Server) handleTriggerCommand(player *Player, command string, args []string) bool {
+	command = strings.ToLower(strings.TrimSpace(command))
 	if handler, exists := s.triggerCommands[command]; exists {
 		return handler(player, args)
 	}
@@ -1415,7 +1426,7 @@ func (s *Server) sendNCNotice(message string, exclude *Player) {
 	s.playerMu.RLock()
 	targets := make([]*Player, 0, len(s.players))
 	for _, p := range s.players {
-		if p == nil || p == exclude || !p.isLoggedIn() {
+		if p == nil || sameControlSession(p, exclude) || !p.isLoggedIn() {
 			continue
 		}
 		if p.playerType&PLTYPE_ANYNC != 0 || (p.playerType&PLTYPE_ANYRC != 0 && p.hasRight(PLPERM_NPCCONTROL)) {
@@ -1426,6 +1437,16 @@ func (s *Server) sendNCNotice(message string, exclude *Player) {
 	for _, p := range targets {
 		p.send(NewBufferFromBytes(rcChatPacket(message)))
 	}
+}
+
+func sameControlSession(a, b *Player) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if a == b || (a.id != 0 && a.id == b.id) {
+		return true
+	}
+	return a.accountName != "" && strings.EqualFold(a.accountName, b.accountName) && a.playerType&PLTYPE_ANYCONTROL != 0 && b.playerType&PLTYPE_ANYCONTROL != 0
 }
 
 func (s *Server) sendPacketToAll(data []byte, excludeId uint16) {
@@ -2582,6 +2603,7 @@ func (p *Player) handlePacket(packet []byte) bool {
 	if len(packet) == 0 {
 		return true
 	}
+	rawPacketId := packet[0]
 	packetId := int(NewBufferFromBytes(packet).ReadGChar())
 	packet = append([]byte{byte(packetId)}, packet[1:]...)
 	p.packetCount++
@@ -2852,7 +2874,11 @@ func (p *Player) handlePacket(packet []byte) bool {
 	default:
 		p.invalidPackets++
 		if p.invalidPackets > 5 {
-			p.server.logger.Warning("Player %s sending invalid packet id=%d name=%s bytes=% X", p.accountName, packetId, packetName, packet)
+			rawName := pliNames[rawPacketId]
+			if rawName == "" {
+				rawName = fmt.Sprintf("UNKNOWN_%d", rawPacketId)
+			}
+			p.server.logger.Warning("Player %s sending invalid packet raw=%d rawName=%s decoded=%d decodedName=%s bytes=% X", p.accountName, rawPacketId, rawName, packetId, packetName, packet)
 			return false
 		}
 	}
@@ -3726,6 +3752,12 @@ func (p *Player) sendPLO_NPCACTION(npcId uint32, action string, params ...string
 	for _, param := range params {
 		buf.WriteGString(param)
 	}
+	p.send(buf)
+	return true
+}
+func (p *Player) sendPLO_TRIGGERACTION(playerId uint16, npcId uint32, x, y byte, action string) bool {
+	buf := NewBuffer()
+	buf.WriteByte(PLO_TRIGGERACTION).WriteGShort(playerId).WriteGInt(npcId).WriteGChar(x).WriteGChar(y).Write([]byte(action))
 	p.send(buf)
 	return true
 }

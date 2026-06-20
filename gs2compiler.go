@@ -29,7 +29,14 @@ func (s *Server) compileGS2ForFeedback(scriptType, scriptName, script string) gs
 		return gs2CompileResult{warningText: "gs2compiler is not configured; saved without compile feedback"}
 	}
 
-	tmpDir, err := os.MkdirTemp("", "gserver-gs2-*")
+	tmpRoot := filepath.Join(".", ".gs2tmp")
+	if s.config != nil {
+		tmpRoot = s.config.ResolvePath(".gs2tmp")
+	}
+	if err := os.MkdirAll(tmpRoot, 0700); err != nil {
+		return gs2CompileResult{errText: err.Error()}
+	}
+	tmpDir, err := os.MkdirTemp(tmpRoot, "compile-*")
 	if err != nil {
 		return gs2CompileResult{errText: err.Error()}
 	}

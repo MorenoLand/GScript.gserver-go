@@ -4,3 +4,6 @@ nul
 *.log
 progress.md
 PROGRESS.md
+tools/gs2compiler/
+tools/gs2vmhost/bin/
+tools/gs2vmhost/obj/
