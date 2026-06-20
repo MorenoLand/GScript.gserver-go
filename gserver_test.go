@@ -2372,6 +2372,47 @@ func TestRCPlayerRightsSetSavesSelfWildcardFolderRights(t *testing.T) {
 	}
 }
 
+func TestRCPlayerRightsSetSyncsLiveSelfFolderRights(t *testing.T) {
+	server := newLoginTestServer(t)
+	writeTestFile(t, server.config.GetBasePath(), "accounts/moondeath.txt", ""+
+		"GRACC001\n"+
+		"NICK moondeath\n"+
+		"LOCALRIGHTS 1\n"+
+		"FOLDERRIGHT rw *.nw\n")
+	rc := NewPlayer(nil, server)
+	rc.id = 2
+	rc.playerType = PLTYPE_RC2
+	rc.accountName = "moondeath"
+	rc.adminRights = PLPERM_SETRIGHTS
+	rc.folderList = []string{"rw *.nw"}
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[rc.id] = rc
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_RC_PLAYERRIGHTSSET)
+	packet.WriteString8Encoded("moondeath")
+	packet.WriteGInt5(uint64(PLPERM_SETRIGHTS))
+	packet.WriteString8Encoded("*.*.*.*")
+	folders := gtokenizeText("rw accounts/*\nrw */*\nrw */*/*\nrw */*/*/*")
+	packet.WriteGShort(uint16(len(folders)))
+	packet.Write([]byte(folders))
+	if !rc.msgPLI_RC_PLAYERRIGHTSSET(packet.Bytes()) {
+		t.Fatal("msgPLI_RC_PLAYERRIGHTSSET returned false")
+	}
+
+	want := "rw accounts/*\nrw */*\nrw */*/*\nrw */*/*/*"
+	if got := strings.Join(rc.folderList, "\n"); got != want {
+		t.Fatalf("live folders = %q, want %q", got, want)
+	}
+	if !rc.msgPLI_RC_PLAYERRIGHTSGET(append([]byte{PLI_RC_PLAYERRIGHTSGET}, []byte("moondeath")...)) {
+		t.Fatal("msgPLI_RC_PLAYERRIGHTSGET returned false")
+	}
+	if !bytes.Contains(rc.outQueue, []byte("rw accounts/*")) {
+		t.Fatalf("rights reopen did not include accounts wildcard: % X", rc.outQueue)
+	}
+}
+
 func TestRCPlayerCommentsGetNetworkPayloadUsesRawComments(t *testing.T) {
 	server := newLoginTestServer(t)
 	writeTestFile(t, server.config.GetBasePath(), "accounts/Admin.txt", ""+
@@ -2739,6 +2780,7 @@ func TestGTokenizeTextRoundTripsConfigLines(t *testing.T) {
 
 func TestRCFileBrowserStartSendsTokenizedFoldersAndDirectory(t *testing.T) {
 	server := newLoginTestServer(t)
+	server.settings.Set("name", "Orion-Go")
 	writeTestFile(t, server.config.GetBasePath(), "levels/test.nw", "level")
 	rc := newRCFileBrowserTestPlayer(server)
 	rc.folderList = []string{"rw levels/*.nw"}
@@ -2757,7 +2799,7 @@ func TestRCFileBrowserStartSendsTokenizedFoldersAndDirectory(t *testing.T) {
 	if string(dirListPayload) != "\"rw levels/*.nw\"" {
 		t.Fatalf("dirlist payload = %q", dirListPayload)
 	}
-	if !bytes.Contains(rc.outQueue, append([]byte{PLO_RC_FILEBROWSER_MESSAGE + 32}, []byte("Welcome to the File Browser.\n")...)) {
+	if !bytes.Contains(rc.outQueue, append([]byte{PLO_RC_FILEBROWSER_MESSAGE + 32}, []byte("Welcome to the File Browser for Orion-Go.\n")...)) {
 		t.Fatalf("file browser welcome missing or malformed: % X", rc.outQueue)
 	}
 
@@ -5722,7 +5764,7 @@ func TestPlayerNicknameChangeAnnouncesToRC(t *testing.T) {
 		logger:  NewLogger("", false),
 		players: make(map[uint16]*Player),
 	}
-	p := &Player{server: server}
+	p := &Player{server: server, playerType: PLTYPE_RC2}
 	p.accountName = "Denveous"
 	p.character.nickName = "Denveous"
 	rc := NewPlayer(nil, server)
@@ -5743,6 +5785,33 @@ func TestPlayerNicknameChangeAnnouncesToRC(t *testing.T) {
 	want = append(want, '\n')
 	if !bytes.Contains(rc.outQueue, want) {
 		t.Fatalf("RC nick change notice = % X, want % X", rc.outQueue, want)
+	}
+}
+
+func TestPlayerNicknameChangeDoesNotAnnounceToRC(t *testing.T) {
+	server := &Server{
+		logger:  NewLogger("", false),
+		players: make(map[uint16]*Player),
+	}
+	p := &Player{server: server, playerType: PLTYPE_CLIENT3}
+	p.accountName = "moondeath"
+	p.character.nickName = "*moondeath"
+	rc := NewPlayer(nil, server)
+	rc.id = 2
+	rc.playerType = PLTYPE_RC2
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[rc.id] = rc
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_NICKNAME).WriteGChar(byte(len("Denveous"))).Write([]byte("Denveous"))
+
+	if !p.msgPLI_PLAYERPROPS(packet.Bytes()) {
+		t.Fatalf("msgPLI_PLAYERPROPS returned false")
+	}
+	if bytes.Contains(rc.outQueue, []byte("changed his/her nick")) {
+		t.Fatalf("player nick change leaked to RC chat: % X", rc.outQueue)
 	}
 }
 
@@ -5936,6 +6005,9 @@ func TestPlayerChatCommandWarptoXYAndLevel(t *testing.T) {
 	if p.levelName != "onlinestartlocal.nw" || p.x != 112 || p.y != 128 {
 		t.Fatalf("warpto xy = level %q x=%d y=%d, want onlinestartlocal.nw 112 128", p.levelName, p.x, p.y)
 	}
+	if !bytes.Contains(p.outQueue, []byte{PLO_PLAYERPROPS + 32, PLPROP_CURCHAT + 32, 32, PLPROP_X + 32, byte(14 + 32), PLPROP_Y + 32, byte(16 + 32)}) {
+		t.Fatalf("self warpto props missing from % X", p.outQueue)
+	}
 
 	packet = NewBuffer()
 	packet.WriteByte(PLI_PLAYERPROPS)
@@ -5987,6 +6059,43 @@ func TestPlayerChatCommandUnstickMeWarpsToConfiguredStart(t *testing.T) {
 	}
 }
 
+func TestPlayerMovementResetsUnstickTimerAndShowsRemainingSeconds(t *testing.T) {
+	server := &Server{
+		logger:   NewLogger("", false),
+		players:  make(map[uint16]*Player),
+		levels:   make(map[string]*Level),
+		settings: NewSettings(),
+	}
+	server.settings.Set("unstickmetime", "30")
+	p := NewPlayer(nil, server)
+	p.id = 1
+	p.playerType = PLTYPE_CLIENT3
+	p.loaded = true
+	p.queueOutgoing = true
+	p.accountName = "moondeath"
+	p.levelName = "onlinestartlocal.nw"
+	p.currentLevel = &Level{levelName: "onlinestartlocal.nw"}
+	p.lastMovement = time.Now().Add(-25 * time.Second)
+
+	move := NewBuffer()
+	move.WriteByte(PLI_PLAYERPROPS)
+	move.WriteGChar(PLPROP_X).WriteGChar(31)
+	if !p.msgPLI_PLAYERPROPS(move.Bytes()) {
+		t.Fatal("move msgPLI_PLAYERPROPS returned false")
+	}
+
+	p.lastMovement = time.Now().Add(-12 * time.Second)
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_CURCHAT).WriteGChar(byte(len("unstick me"))).Write([]byte("unstick me"))
+	if !p.msgPLI_PLAYERPROPS(packet.Bytes()) {
+		t.Fatal("unstick msgPLI_PLAYERPROPS returned false")
+	}
+	if !strings.Contains(p.character.chatMessage, "18 seconds") {
+		t.Fatalf("chatMessage = %q, want remaining 18 seconds", p.character.chatMessage)
+	}
+}
+
 func TestPlayerChatCommandUpdateLevelReloadsCurrentLevel(t *testing.T) {
 	dir := t.TempDir()
 	server := &Server{
@@ -6026,6 +6135,96 @@ func TestPlayerChatCommandUpdateLevelReloadsCurrentLevel(t *testing.T) {
 	}
 	if len(level.boardChanges) != 0 || level.isSparringZone {
 		t.Fatalf("level was not reloaded: boardChanges=%d spar=%v", len(level.boardChanges), level.isSparringZone)
+	}
+}
+
+func TestPlayerChatCommandSetNickBroadcastsNicknameProp(t *testing.T) {
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	server := &Server{
+		logger:   NewLogger("", false),
+		players:  make(map[uint16]*Player),
+		levels:   map[string]*Level{"onlinestartlocal.nw": level},
+		settings: NewSettings(),
+	}
+	p := NewPlayer(nil, server)
+	p.id = 1
+	p.playerType = PLTYPE_CLIENT3
+	p.loaded = true
+	p.queueOutgoing = true
+	p.accountName = "moondeath"
+	p.currentLevel = level
+	p.levelName = "onlinestartlocal.nw"
+	other := NewPlayer(nil, server)
+	other.id = 2
+	other.playerType = PLTYPE_CLIENT3
+	other.loaded = true
+	other.queueOutgoing = true
+	other.currentLevel = level
+	other.conn, _ = net.Pipe()
+	defer other.conn.Close()
+	server.players[p.id] = p
+	server.players[other.id] = other
+	level.players = []uint16{p.id, other.id}
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_CURCHAT).WriteGChar(byte(len("setnick Denveous"))).Write([]byte("setnick Denveous"))
+
+	if !p.msgPLI_PLAYERPROPS(packet.Bytes()) {
+		t.Fatal("msgPLI_PLAYERPROPS returned false")
+	}
+	if p.character.nickName != "Denveous" {
+		t.Fatalf("nickname = %q, want Denveous", p.character.nickName)
+	}
+	wantSelf := append([]byte{PLO_PLAYERPROPS + 32, PLPROP_NICKNAME + 32, 8 + 32}, []byte("Denveous")...)
+	if !bytes.Contains(p.outQueue, wantSelf) {
+		t.Fatalf("self nickname prop missing % X in % X", wantSelf, p.outQueue)
+	}
+	wantOther := append([]byte{PLO_OTHERPLPROPS + 32}, NewBuffer().WriteGShort(p.id).Bytes()...)
+	wantOther = append(wantOther, PLPROP_NICKNAME+32, 8+32)
+	wantOther = append(wantOther, []byte("Denveous")...)
+	if !bytes.Contains(other.outQueue, wantOther) {
+		t.Fatalf("other nickname prop missing % X in % X", wantOther, other.outQueue)
+	}
+}
+
+func TestPlayerChatCommandShowAdminsSendsChatProp(t *testing.T) {
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	server := &Server{
+		logger:   NewLogger("", false),
+		players:  make(map[uint16]*Player),
+		levels:   map[string]*Level{"onlinestartlocal.nw": level},
+		settings: NewSettings(),
+	}
+	p := NewPlayer(nil, server)
+	p.id = 1
+	p.playerType = PLTYPE_CLIENT3
+	p.loaded = true
+	p.queueOutgoing = true
+	p.currentLevel = level
+	p.levelName = "onlinestartlocal.nw"
+	rc := NewPlayer(nil, server)
+	rc.id = 2
+	rc.accountName = "moondeath"
+	rc.playerType = PLTYPE_RC
+	server.players[p.id] = p
+	server.players[rc.id] = rc
+	level.players = []uint16{p.id}
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_CURCHAT).WriteGChar(byte(len("showadmins"))).Write([]byte("showadmins"))
+
+	if !p.msgPLI_PLAYERPROPS(packet.Bytes()) {
+		t.Fatal("msgPLI_PLAYERPROPS returned false")
+	}
+	if p.character.chatMessage != "admins: moondeath" {
+		t.Fatalf("chatMessage = %q, want admins: moondeath", p.character.chatMessage)
+	}
+	if !bytes.Contains(p.outQueue, []byte("admins: moondeath")) {
+		t.Fatalf("self chat prop missing in % X", p.outQueue)
 	}
 }
 

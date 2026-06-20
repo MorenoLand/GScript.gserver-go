@@ -43,9 +43,26 @@ func (p *Player) handlePlayerChatCommand(chat string) bool {
 		return false
 	}
 	command := strings.ToLower(words[0])
+	if p.server != nil && p.server.logger != nil {
+		p.server.logger.Debug("PLAYERCHAT command candidate from %s: %s", p.accountName, trimmed)
+	}
 	switch command {
+	case "setnick":
+		return p.handlePlayerChatSetNick(trimmed)
+	case "sethead":
+		return p.handlePlayerChatSetHead(words)
+	case "setbody":
+		return p.handlePlayerChatSetBody(words)
+	case "setsword":
+		return p.handlePlayerChatSetSword(words)
+	case "setshield":
+		return p.handlePlayerChatSetShield(words)
+	case "setskin", "setcoat", "setsleeves", "setshoes", "setbelt":
+		return p.handlePlayerChatSetColor(command, words)
 	case "warpto":
 		return p.handlePlayerChatWarpto(words)
+	case "summon":
+		return p.handlePlayerChatSummon(words)
 	case "unstick", "unstuck":
 		if len(words) == 2 && strings.EqualFold(words[1], "me") {
 			return p.handlePlayerChatUnstickMe(trimmed)
@@ -57,16 +74,101 @@ func (p *Player) handlePlayerChatCommand(chat string) bool {
 			} else if level := p.server.GetLevel(cleanLevelName(p.levelName)); level != nil {
 				level.reload(p.server)
 			}
+			p.clearChatWithProps()
 			return true
 		}
+	case "showadmins":
+		return p.handlePlayerChatShowAdmins()
+	case "showguild":
+		return p.handlePlayerChatShowGuild(words)
+	case "showkills":
+		p.setChat(fmt.Sprintf("kills: %d", int(p.kills)))
+		return true
+	case "showdeaths":
+		p.setChat(fmt.Sprintf("deaths: %d", int(p.deaths)))
+		return true
+	case "showonlinetime":
+		p.setChat("onlinetime: " + formatOnlineTime(p.onlineTime))
+		return true
+	case "toguild:":
+		return p.handlePlayerChatToGuild(trimmed)
 	}
 	return false
+}
+
+func (p *Player) handlePlayerChatSetNick(chat string) bool {
+	if time.Since(p.lastNick) < 10*time.Second {
+		p.server.logger.Debug("PLAYERCHAT setnick denied by cooldown for %s", p.accountName)
+		p.setChat("Wait 10 seconds before changing your nick again!")
+		return true
+	}
+	newName := strings.TrimSpace(chat[7:])
+	p.lastNick = time.Now()
+	p.setNickname(newName)
+	p.server.logger.Debug("PLAYERCHAT setnick %s -> %s", p.accountName, p.character.nickName)
+	p.clearChatWithProps(PLPROP_NICKNAME)
+	return true
+}
+
+func (p *Player) handlePlayerChatSetHead(words []string) bool {
+	if len(words) != 2 || !p.server.settings.GetBool("setheadallowed", true) {
+		return false
+	}
+	p.character.headImage = words[1]
+	p.clearChatWithProps(PLPROP_HEADGIF)
+	return true
+}
+
+func (p *Player) handlePlayerChatSetBody(words []string) bool {
+	if len(words) != 2 || !p.server.settings.GetBool("setbodyallowed", true) {
+		return false
+	}
+	p.character.bodyImage = words[1]
+	p.clearChatWithProps(PLPROP_BODYIMG)
+	return true
+}
+
+func (p *Player) handlePlayerChatSetSword(words []string) bool {
+	if len(words) != 2 || !p.server.settings.GetBool("setswordallowed", true) {
+		return false
+	}
+	p.character.swordImage = words[1]
+	p.clearChatWithProps(PLPROP_SWORDPOWER)
+	return true
+}
+
+func (p *Player) handlePlayerChatSetShield(words []string) bool {
+	if len(words) != 2 || !p.server.settings.GetBool("setshieldallowed", true) {
+		return false
+	}
+	p.character.shieldImage = words[1]
+	p.clearChatWithProps(PLPROP_SHIELDPOWER)
+	return true
+}
+
+func (p *Player) handlePlayerChatSetColor(command string, words []string) bool {
+	if len(words) != 2 || !p.server.settings.GetBool("setcolorsallowed", true) {
+		return false
+	}
+	colorName := strings.ToLower(words[1])
+	if colorName == "grey" {
+		colorName = "gray"
+	}
+	color, ok := graalColor(colorName)
+	if !ok {
+		return true
+	}
+	colorSlot := map[string]int{"setskin": 0, "setcoat": 1, "setsleeves": 2, "setshoes": 3, "setbelt": 4}[command]
+	p.character.colors[colorSlot] = color
+	p.clearChatWithProps(PLPROP_COLORS)
+	return true
 }
 
 func (p *Player) handlePlayerChatWarpto(words []string) bool {
 	if len(words) == 2 {
 		if !p.hasRight(PLPERM_WARPTOPLAYER) && !p.server.allowsWarpToAll() {
-			p.character.chatMessage = "(not authorized to warp)"
+			p.server.logger.Debug("PLAYERCHAT warpto player denied for %s rights=%d warptoforall=%v", p.accountName, p.adminRights, p.server.allowsWarpToAll())
+			p.setChat("(not authorized to warp)")
 			return true
 		}
 		if player := p.server.findPlayerByAccountOrNick(words[1], PLTYPE_ANYCLIENT); player != nil && player.currentLevel != nil {
@@ -74,38 +176,61 @@ func (p *Player) handlePlayerChatWarpto(words []string) bool {
 			if levelName == "" {
 				levelName = player.currentLevel.levelName
 			}
+			p.server.logger.Debug("PLAYERCHAT warpto player %s -> %s %s %.2f %.2f", p.accountName, words[1], levelName, float64(player.x)/16.0, float64(player.y)/16.0)
 			p.warp(levelName, float64(player.x)/16.0, float64(player.y)/16.0)
+			p.clearChatWithProps()
 		}
 		return true
 	}
 	if len(words) == 3 || len(words) == 4 {
 		if !p.hasRight(PLPERM_WARPTO) && !p.server.allowsWarpToAll() {
-			p.character.chatMessage = "(not authorized to warp)"
+			p.server.logger.Debug("PLAYERCHAT warpto xy denied for %s rights=%d warptoforall=%v", p.accountName, p.adminRights, p.server.allowsWarpToAll())
+			p.setChat("(not authorized to warp)")
 			return true
 		}
 		x, errX := strconv.ParseFloat(words[1], 64)
 		y, errY := strconv.ParseFloat(words[2], 64)
 		if errX != nil || errY != nil {
+			p.server.logger.Debug("PLAYERCHAT warpto xy parse failed for %s: %v %v", p.accountName, errX, errY)
 			return true
 		}
 		if len(words) == 4 {
+			p.server.logger.Debug("PLAYERCHAT warpto level %s -> %s %.2f %.2f", p.accountName, words[3], x, y)
 			p.warp(words[3], x, y)
+			p.clearChatWithProps()
 			return true
 		}
 		p.setX(float32(x))
 		p.setY(float32(y))
-		legacyMove := NewBuffer()
-		preciseMove := NewBuffer()
-		p.appendPlayerPropDelta(PLPROP_X, NewBuffer(), legacyMove, preciseMove)
-		p.appendPlayerPropDelta(PLPROP_Y, NewBuffer(), legacyMove, preciseMove)
-		p.sendPlayerPropDeltasToCurrentLevel(nil, legacyMove.Bytes(), preciseMove.Bytes())
+		p.server.logger.Debug("PLAYERCHAT warpto xy %s -> %.2f %.2f encoded=%d,%d", p.accountName, x, y, p.x, p.y)
+		p.clearChatWithProps(PLPROP_X, PLPROP_Y)
 		return true
 	}
 	return true
 }
 
+func (p *Player) handlePlayerChatSummon(words []string) bool {
+	if len(words) != 2 {
+		return false
+	}
+	if !p.hasRight(PLPERM_SUMMON) {
+		p.setChat("(not authorized to summon)")
+		return true
+	}
+	if player := p.server.findPlayerByAccountOrNick(words[1], PLTYPE_ANYCLIENT); player != nil {
+		player.warp(p.levelName, float64(p.x)/16.0, float64(p.y)/16.0)
+	}
+	p.clearChatWithProps()
+	return true
+}
+
 func (s *Server) allowsWarpToAll() bool {
 	return s != nil && s.settings != nil && s.settings.GetBool("warptoforall", false)
+}
+
+func (p *Player) markMovement() {
+	p.status &^= PLSTATUS_PAUSED
+	p.lastMovement = time.Now()
 }
 
 func (p *Player) handlePlayerChatUnstickMe(originalChat string) bool {
@@ -119,8 +244,11 @@ func (p *Player) handlePlayerChatUnstickMe(originalChat string) bool {
 		}
 	}
 	unstickTime := p.server.settings.GetInt("unstickmetime", 30)
-	if int(time.Since(p.lastMovement).Seconds()) < unstickTime {
-		p.character.chatMessage = fmt.Sprintf("Don't move for %d seconds before doing '%s'!", unstickTime, originalChat)
+	elapsed := int(time.Since(p.lastMovement).Seconds())
+	if elapsed < unstickTime {
+		remaining := unstickTime - elapsed
+		p.server.logger.Debug("PLAYERCHAT unstick delayed for %s elapsed=%ds required=%ds", p.accountName, elapsed, unstickTime)
+		p.setChat(fmt.Sprintf("Don't move for %d seconds before doing '%s'!", remaining, originalChat))
 		return true
 	}
 	p.lastMovement = time.Now()
@@ -130,9 +258,137 @@ func (p *Player) handlePlayerChatUnstickMe(originalChat string) bool {
 	}
 	x := getSettingsFloat(p.server.settings, "unstickmex", 30.0)
 	y := getSettingsFloat(p.server.settings, "unstickmey", 30.5)
+	p.server.logger.Debug("PLAYERCHAT unstick warp %s -> %s %.2f %.2f", p.accountName, levelName, x, y)
 	p.warp(levelName, x, y)
-	p.character.chatMessage = "Warped!"
+	p.setChat("Warped!")
 	return true
+}
+
+func (p *Player) handlePlayerChatShowAdmins() bool {
+	names := make([]string, 0)
+	for _, player := range p.server.players {
+		if player.playerType&PLTYPE_ANYRC != 0 {
+			names = append(names, player.accountName)
+		}
+	}
+	if len(names) == 0 {
+		p.setChat("admins: (no one)")
+	} else {
+		p.setChat("admins: " + strings.Join(names, ", "))
+	}
+	return true
+}
+
+func (p *Player) handlePlayerChatShowGuild(words []string) bool {
+	guild := p.guild
+	if len(words) == 2 {
+		guild = words[1]
+	}
+	if guild == "" {
+		return false
+	}
+	names := make([]string, 0)
+	for _, player := range p.server.players {
+		if player.guild == guild {
+			names = append(names, strings.TrimSpace(strings.Split(player.character.nickName, "(")[0]))
+		}
+	}
+	if len(names) == 0 {
+		p.setChat(fmt.Sprintf("members of '%s': (no one)", guild))
+	} else {
+		p.setChat(fmt.Sprintf("members of '%s': %s", guild, strings.Join(names, ", ")))
+	}
+	return true
+}
+
+func (p *Player) handlePlayerChatToGuild(chat string) bool {
+	if p.guild == "" {
+		return false
+	}
+	pm := strings.TrimSpace(chat[8:])
+	if pm == "" {
+		return false
+	}
+	count := 0
+	for _, player := range p.server.players {
+		if player.guild != p.guild || player.conn == nil {
+			continue
+		}
+		out := NewBuffer()
+		out.WriteByte(PLO_PRIVATEMESSAGE).WriteGShort(p.id).Write([]byte("\"\",\"Guild message:\",\"")).Write([]byte(pm)).WriteByte('"')
+		player.send(out)
+		count++
+	}
+	suffix := ""
+	if count != 0 {
+		suffix = "s"
+	}
+	p.setChat(fmt.Sprintf("(%d guild member%s received your message)", count, suffix))
+	return true
+}
+
+func (p *Player) clearChatWithProps(propIds ...int) {
+	p.character.chatMessage = ""
+	propIds = append(propIds, PLPROP_CURCHAT)
+	p.sendPlayerPropChanges(propIds...)
+}
+
+func (p *Player) setChat(chat string) {
+	if len(chat) > 223 {
+		chat = chat[:223]
+	}
+	p.character.chatMessage = chat
+	p.sendPlayerPropChanges(PLPROP_CURCHAT)
+}
+
+func (p *Player) sendPlayerPropChange(propId int) {
+	p.sendPlayerPropChanges(propId)
+}
+
+func (p *Player) sendPlayerPropChanges(propIds ...int) {
+	if p.server != nil && p.server.logger != nil {
+		p.server.logger.Debug("PLAYERCHAT send props %v to %s", propIds, p.accountName)
+	}
+	common := NewBuffer()
+	legacy := NewBuffer()
+	precise := NewBuffer()
+	for _, propId := range propIds {
+		switch propId {
+		case PLPROP_X, PLPROP_Y, PLPROP_Z, PLPROP_X2, PLPROP_Y2, PLPROP_Z2:
+			p.appendPlayerPropDelta(propId, common, legacy, precise)
+		default:
+			common.WriteGChar(byte(propId))
+			common.Write(p.getProp(propId))
+		}
+	}
+	selfMove := legacy.Bytes()
+	if playerSupportsPreciseMovement(p) {
+		selfMove = precise.Bytes()
+	}
+	selfProps := append(append([]byte(nil), common.Bytes()...), selfMove...)
+	if len(selfProps) > 0 {
+		p.sendPacket(append([]byte{PLO_PLAYERPROPS}, selfProps...))
+	}
+	p.sendPlayerPropDeltasToCurrentLevel(common.Bytes(), legacy.Bytes(), precise.Bytes())
+}
+
+func graalColor(name string) (byte, bool) {
+	colors := map[string]byte{"orange": 0, "white": 1, "blue": 2, "red": 3, "black": 4, "lightblue": 5, "green": 6, "yellow": 7, "pink": 8, "gray": 9, "brown": 10, "darkred": 11, "darkgreen": 12, "darkblue": 13, "purple": 14, "darkgray": 15, "cyan": 16}
+	color, ok := colors[name]
+	return color, ok
+}
+
+func formatOnlineTime(total int) string {
+	seconds := total % 60
+	minutes := (total / 60) % 60
+	hours := total / 3600
+	if hours != 0 {
+		return fmt.Sprintf("%dh %dm %ds", hours, minutes, seconds)
+	}
+	if minutes != 0 {
+		return fmt.Sprintf("%dm %ds", minutes, seconds)
+	}
+	return fmt.Sprintf("%ds", seconds)
 }
 
 func getSettingsFloat(settings *Settings, key string, defaultValue float64) float64 {

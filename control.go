@@ -593,7 +593,7 @@ func (p *Player) msgPLI_RC_PLAYERPROPSGET2(packet []byte) bool {
 }
 func (p *Player) msgPLI_RC_PLAYERPROPSGET3(packet []byte) bool {
 	accountName := readRCString8AccountPayload(packet, PLI_RC_PLAYERPROPSGET3)
-	targetPlayer := p.server.getPlayerByAccount(accountName, PLTYPE_ANYCLIENT)
+	targetPlayer := p.server.getPlayerByAccount(accountName, PLTYPE_ANYPLAYER|PLTYPE_NPCSERVER)
 	if targetPlayer == nil {
 		if !p.server.accountExists(accountName) {
 			return true
@@ -1208,6 +1208,13 @@ func (p *Player) msgPLI_RC_PLAYERRIGHTSSET(packet []byte) bool {
 	}
 	targetPlayer.folderList = validFolders
 	targetPlayer.SaveAccount()
+	for _, player := range p.server.players {
+		if strings.EqualFold(player.accountName, accountName) {
+			player.adminRights = targetPlayer.adminRights
+			player.adminIp = targetPlayer.adminIp
+			player.folderList = append([]string(nil), targetPlayer.folderList...)
+		}
+	}
 	p.server.logger.Info("%s set rights for account: %s", p.accountName, accountName)
 	p.server.sendRCChat(p.accountName + " has set the rights of " + accountName)
 	return true
@@ -1427,7 +1434,11 @@ func (p *Player) msgPLI_RC_FILEBROWSER_START(packet []byte) bool {
 	if !p.isFtp {
 		buf2 := NewBuffer()
 		buf2.WriteByte(PLO_RC_FILEBROWSER_MESSAGE)
-		buf2.Write([]byte("Welcome to the File Browser."))
+		serverName := strings.TrimSpace(p.server.settings.Get("name"))
+		if serverName == "" {
+			serverName = "this server"
+		}
+		buf2.Write([]byte("Welcome to the File Browser for " + serverName + "."))
 		p.send(buf2)
 	}
 	if _, exists := folderMap[p.lastFolder]; !exists {

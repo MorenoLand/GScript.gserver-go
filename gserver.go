@@ -135,7 +135,7 @@ func (s *Server) Run() error {
 	s.logger.Info("Server started")
 	go s.refreshScriptHelpCache()
 	go s.acceptConnections()
-	ticker := time.NewTicker(100 * time.Millisecond)
+	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		select {
@@ -143,7 +143,7 @@ func (s *Server) Run() error {
 			s.running = false
 			return nil
 		case <-ticker.C:
-			s.socketMgr.Update(100 * time.Millisecond)
+			s.socketMgr.Update(20 * time.Millisecond)
 			s.doTimedEvents()
 		}
 	}
@@ -4689,7 +4689,7 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 			if val != "" && val != "unknown" {
 				oldNick := p.character.nickName
 				p.setNickname(val)
-				if oldNick != p.character.nickName {
+				if oldNick != p.character.nickName && p.playerType&PLTYPE_ANYRC != 0 {
 					p.server.sendRCChat(p.accountName + " changed his/her nick to " + p.character.nickName)
 				}
 			}
@@ -4741,10 +4741,13 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 			_ = buf.ReadGShort()
 		case PLPROP_X:
 			p.x = int16(buf.ReadGChar()) * 8
+			p.markMovement()
 		case PLPROP_Y:
 			p.y = int16(buf.ReadGChar()) * 8
+			p.markMovement()
 		case PLPROP_Z:
 			p.z = (int16(buf.ReadGChar()) - 50) * 8
+			p.markMovement()
 		case PLPROP_CURLEVEL:
 			p.levelName = buf.ReadGCharString()
 		case PLPROP_SPRITE:
@@ -4824,10 +4827,13 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 			_ = buf.ReadGChar()
 		case PLPROP_X2:
 			p.x = decodeSignedGShortCoord(buf.ReadGShort())
+			p.markMovement()
 		case PLPROP_Y2:
 			p.y = decodeSignedGShortCoord(buf.ReadGShort())
+			p.markMovement()
 		case PLPROP_Z2:
 			p.z = decodeSignedGShortCoord(buf.ReadGShort())
+			p.markMovement()
 		case PLPROP_UNKNOWN81:
 			_ = buf.ReadGChar()
 		case PLPROP_COMMUNITYNAME:
