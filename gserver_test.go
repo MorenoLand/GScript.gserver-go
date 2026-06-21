@@ -250,6 +250,30 @@ func TestServerSideGS2AppliesServerFlagMutations(t *testing.T) {
 	}
 }
 
+func TestServerSideGS2FileFunctionsUseServerBasePath(t *testing.T) {
+	server := newLoginTestServer(t)
+	enableTestNPCServer(server)
+	weapon := &Weapon{name: "-files", script: `function onActionServerside() {
+		savestring("scripts/out.txt", "ok", 0);
+	}`}
+	server.AddWeapon(weapon)
+	player := NewPlayer(nil, server)
+	player.id = 2
+	player.playerType = PLTYPE_CLIENT3
+	player.accountName = "moondeath"
+	server.players[player.id] = player
+
+	server.runServerSideWeaponEventForPlayer(weapon, "onActionServerside", player)
+
+	data, err := os.ReadFile(filepath.Join(server.config.GetBasePath(), "scripts", "out.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "ok" {
+		t.Fatalf("saved file = %q", data)
+	}
+}
+
 func TestTriggerActionServersideWeaponSendsTriggerClient(t *testing.T) {
 	server := &Server{
 		logger:          NewLogger("", false),

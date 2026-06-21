@@ -69,6 +69,10 @@ func (s *Server) runServerSideGS2NativeWithState(scriptType, scriptName, eventNa
 	if playerContext == nil {
 		playerContext = make(map[string]string)
 	}
+	fileRoot := ""
+	if s.config != nil {
+		fileRoot = s.config.GetBasePath()
+	}
 	result := nativegs2vm.Run(nativegs2vm.Config{
 		ScriptName:    scriptName,
 		EventName:     eventName,
@@ -80,6 +84,7 @@ func (s *Server) runServerSideGS2NativeWithState(scriptType, scriptName, eventNa
 		This:          thisState,
 		ServerFlags:   s.snapshotServerFlags(),
 		ServerOptions: s.snapshotServerOptions(),
+		FileRoot:      fileRoot,
 	})
 	out := gs2VMResult{output: result.Output, this: result.This, err: result.Err}
 	for _, trigger := range result.ClientTriggers {

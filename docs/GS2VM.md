@@ -76,6 +76,10 @@ Implemented global functions:
 - `findimg(index)`
 - `getimgwidth(image)`
 - `getimgheight(image)`
+- `loadstring(filename)`
+- `loadlines(filename)`
+- `savestring(filename, value, mode)`
+- `savelines(filename, lines, mode)`
 
 Implemented object behavior:
 
@@ -87,6 +91,8 @@ Implemented object behavior:
 - `showimg()` creates or updates an image object for the current VM run.
 - `findimg()` returns that image object or `null`.
 - Image objects currently expose at least `index`, `image`, `x`, `y`, and `rotation`.
+- String values support `.savestring(filename, mode)` and `.loadstring(filename)`.
+- Array values support `.savelines(filename, mode)` and `.loadlines(filename)`.
 
 ## Player Lookup And PMs
 
