@@ -6848,6 +6848,7 @@ func (l *Level) loadLevel(server *Server, levelName string) bool {
 }
 func (l *Level) loadNW(server *Server, levelName string) bool {
 	l.levelName = levelName
+	l.fileName = levelName
 	lines, err := server.config.LoadFileAsLines(levelName)
 	if err != nil {
 		return false
@@ -6967,6 +6968,7 @@ func (l *Level) loadZelda(server *Server, levelName string) bool {
 	}
 	buf := NewBufferFromBytes(data)
 	l.levelName = levelName
+	l.fileName = levelPath
 	version := string(buf.data[buf.read : buf.read+8])
 	buf.read += 8
 	var bits int

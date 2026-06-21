@@ -2071,7 +2071,12 @@ func (s *Server) resendLevelData(level *Level) {
 	}
 	for _, id := range append([]uint16(nil), level.getPlayers()...) {
 		if player, ok := s.players[id]; ok && player != nil && player.conn != nil {
-			player.sendLevelData(level, level.levelName, 0, false, true)
+			levelName := player.levelName
+			if levelName == "" {
+				levelName = level.levelName
+			}
+			player.currentLevel = level
+			player.sendLevelData(level, levelName, 0, false, true)
 		}
 	}
 }

@@ -3858,6 +3858,54 @@ func TestRCFileBrowserUploadReloadsCachedLevel(t *testing.T) {
 	}
 }
 
+func TestRCFileBrowserUploadReloadsRootWorldLevelLoadedByWarp(t *testing.T) {
+	server := newLoginTestServer(t)
+	rc := newRCFileBrowserTestPlayer(server)
+	rc.folderList = []string{"rw *.nw"}
+	rc.lastFolder = "world/"
+	writeTestFile(t, server.config.GetBasePath(), "world/onlinestartlocal.nw", "GLEVNW01\nCHEST 20 24 greenrupee 0\n")
+	client := NewPlayer(fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server)
+	client.id = 4
+	client.queueOutgoing = true
+	client.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[client.id] = client
+	client.warp("onlinestartlocal.nw", 30, 30)
+	level := client.currentLevel
+	if level == nil {
+		t.Fatalf("client current level was not set")
+	}
+	client.outQueue = client.outQueue[:0]
+
+	packet := append([]byte{PLI_RC_FILEBROWSER_UP, byte(len("onlinestartlocal.nw")) + 32}, []byte("onlinestartlocal.nw")...)
+	packet = append(packet, []byte("GLEVNW02\nCHEST 22 24 greenrupee 0\nNPC block.png 30 30\nNPCEND\n")...)
+	rc.msgPLI_RC_FILEBROWSER_UP(packet)
+
+	if level.fileVersion != "GLEVNW02" {
+		t.Fatalf("level fileVersion = %q, want GLEVNW02", level.fileVersion)
+	}
+	if len(level.chests) != 1 || level.chests[0].x != 22 || level.chests[0].y != 24 {
+		t.Fatalf("level chests = %#v, want moved chest at 22,24", level.chests)
+	}
+	if len(level.npcs) != 1 {
+		t.Fatalf("uploaded level NPC count = %d, want 1", len(level.npcs))
+	}
+	for _, npc := range level.npcs {
+		if npc.image != "block.png" || npc.x != 30 || npc.y != 30 {
+			t.Fatalf("uploaded level NPC = %#v, want block.png at 30,30", npc)
+		}
+	}
+	if !bytes.Contains(client.outQueue, []byte{PLO_BOARDPACKET + 32}) {
+		t.Fatalf("client did not receive refreshed board packet: % X", client.outQueue)
+	}
+	if !bytes.Contains(client.outQueue, []byte("block.png")) {
+		t.Fatalf("client did not receive refreshed NPC props: % X", client.outQueue)
+	}
+	wantChest := []byte{PLO_LEVELCHEST + 32, 0 + 32, 22 + 32, 24 + 32}
+	if !bytes.Contains(client.outQueue, wantChest) {
+		t.Fatalf("client did not receive moved chest packet: % X", client.outQueue)
+	}
+}
+
 func TestRCFileBrowserLargeUploadReloadsCachedLevel(t *testing.T) {
 	server := newLoginTestServer(t)
 	rc := newRCFileBrowserTestPlayer(server)

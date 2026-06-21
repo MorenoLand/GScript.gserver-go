@@ -7,6 +7,11 @@ func (l *Level) reload(server *Server) bool {
 	if levelName == "" {
 		levelName = l.levelName
 	}
+	for _, npc := range l.npcs {
+		if npc != nil {
+			server.DeleteNPC(npc.id)
+		}
+	}
 	players := append([]uint16(nil), l.players...)
 	l.fileVersion = ""
 	l.actualLevelName = ""
