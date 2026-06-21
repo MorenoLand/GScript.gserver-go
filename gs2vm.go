@@ -13,26 +13,28 @@ import (
 var gs2JoinPattern = regexp.MustCompile(`(?im)^\s*join\s*(?:\(\s*["']?([^"')\s;]+)["']?\s*\)|["']?([^"'\s;]+)["']?)\s*;?\s*$`)
 
 type gs2VMResult struct {
-	output          []string
-	clientTriggers  []string
-	playerFlags     []gs2VMPlayerFlag
-	serverFlags     []gs2VMServerFlag
-	playerMessages  []gs2VMPlayerMessage
-	playerWeapons   []gs2VMPlayerWeapon
-	playerWarps     []gs2VMPlayerWarp
-	npcActions      []gs2VMNPCAction
-	socketActions   []gs2VMSocketAction
-	socketUpdates   []gs2VMSocketUpdate
-	scheduledEvents []gs2VMScheduledEvent
-	this            map[string]any
-	err             string
-	scriptType      string
-	scriptName      string
-	eventName       string
-	script          string
-	playerContext   map[string]string
-	npcID           uint32
-	vmRevision      int64
+	output           []string
+	clientTriggers   []string
+	playerFlags      []gs2VMPlayerFlag
+	serverFlags      []gs2VMServerFlag
+	playerMessages   []gs2VMPlayerMessage
+	playerWeapons    []gs2VMPlayerWeapon
+	playerWarps      []gs2VMPlayerWarp
+	npcFlags         []gs2VMNPCFlag
+	npcFunctionCalls []gs2VMNPCFunctionCall
+	npcActions       []gs2VMNPCAction
+	socketActions    []gs2VMSocketAction
+	socketUpdates    []gs2VMSocketUpdate
+	scheduledEvents  []gs2VMScheduledEvent
+	this             map[string]any
+	err              string
+	scriptType       string
+	scriptName       string
+	eventName        string
+	script           string
+	playerContext    map[string]string
+	npcID            uint32
+	vmRevision       int64
 }
 
 type gs2VMPlayerFlag struct {
@@ -63,6 +65,19 @@ type gs2VMPlayerWarp struct {
 	level   string
 	x       float64
 	y       float64
+}
+
+type gs2VMNPCFlag struct {
+	id    uint32
+	name  string
+	value string
+}
+
+type gs2VMNPCFunctionCall struct {
+	id       uint32
+	name     string
+	function string
+	args     []string
 }
 
 type gs2VMNPCAction struct {
@@ -135,11 +150,13 @@ func (s *Server) runServerSideGS2NativeWithStateAndSocket(scriptType, scriptName
 		PlayerFlags:   s.snapshotGS2PlayerFlags(playerContext["account"]),
 		Players:       s.snapshotGS2Players(),
 		Weapons:       s.snapshotGS2Weapons(),
+		NPCs:          s.snapshotGS2NPCs(),
 		NPCID:         npcID,
 		This:          thisState,
 		ServerFlags:   s.snapshotServerFlags(),
 		ServerOptions: s.snapshotServerOptions(),
 		FileRoot:      fileRoot,
+		FileRights:    s.snapshotGS2FileRights(),
 		Socket:        socket,
 	})
 	out := gs2VMResult{output: result.Output, this: result.This, err: result.Err, scriptType: scriptType, scriptName: scriptName, eventName: eventName, script: script, playerContext: copyStringMap(playerContext), npcID: npcID}
@@ -162,6 +179,12 @@ func (s *Server) runServerSideGS2NativeWithStateAndSocket(scriptType, scriptName
 	}
 	for _, warp := range result.PlayerWarps {
 		out.playerWarps = append(out.playerWarps, gs2VMPlayerWarp{account: warp.Account, level: warp.Level, x: warp.X, y: warp.Y})
+	}
+	for _, flag := range result.NPCFlags {
+		out.npcFlags = append(out.npcFlags, gs2VMNPCFlag{id: flag.ID, name: flag.Name, value: flag.Value})
+	}
+	for _, call := range result.NPCFunctionCalls {
+		out.npcFunctionCalls = append(out.npcFunctionCalls, gs2VMNPCFunctionCall{id: call.ID, name: call.Name, function: call.Function, args: call.Args})
 	}
 	for _, action := range result.NPCActions {
 		out.npcActions = append(out.npcActions, gs2VMNPCAction{id: action.ID, shapeType: action.ShapeType, width: action.Width, height: action.Height, tileTypes: action.TileTypes, chat: action.Chat, warpLevel: action.WarpLevel, warpX: action.WarpX, warpY: action.WarpY})
@@ -188,6 +211,7 @@ func snapshotGS2Player(player *Player) map[string]string {
 		account = "pc:" + strconv.FormatInt(player.deviceId, 10)
 	}
 	out["account"] = account
+	out["id"] = strconv.Itoa(int(player.id))
 	out["nick"] = player.character.nickName
 	out["nickname"] = player.character.nickName
 	out["level"] = player.levelName
@@ -215,7 +239,7 @@ func (s *Server) snapshotGS2Players() []nativegs2vm.PlayerContext {
 		if player == nil || account == "" || player.playerType&(PLTYPE_ANYPLAYER|PLTYPE_ANYNC|PLTYPE_NPCSERVER) == 0 {
 			continue
 		}
-		out = append(out, nativegs2vm.PlayerContext{Account: account, Nick: player.character.nickName, Nickname: player.character.nickName, Level: player.levelName, Flags: copyStringMap(player.flagList)})
+		out = append(out, nativegs2vm.PlayerContext{ID: player.id, Account: account, Nick: player.character.nickName, Nickname: player.character.nickName, Level: player.levelName, Flags: copyStringMap(player.flagList)})
 	}
 	return out
 }
@@ -238,9 +262,48 @@ func (s *Server) snapshotGS2Weapons() []nativegs2vm.WeaponContext {
 	return out
 }
 
+func (s *Server) snapshotGS2FileRights() []string {
+	if s == nil || s.npcServer == nil || s.npcServer.Player() == nil {
+		return nil
+	}
+	return append([]string(nil), s.npcServer.Player().folderList...)
+}
+
 func copyStringMap(values map[string]string) map[string]string {
 	out := make(map[string]string, len(values))
 	for key, value := range values {
+		out[key] = value
+	}
+	return out
+}
+
+func (s *Server) snapshotGS2NPCs() []nativegs2vm.NPCContext {
+	if s == nil {
+		return nil
+	}
+	s.npcMu.RLock()
+	defer s.npcMu.RUnlock()
+	out := make([]nativegs2vm.NPCContext, 0, len(s.npcs))
+	for _, npc := range s.npcs {
+		if npc == nil || npc.npcName == "" || npc.npcType != DBNPC {
+			continue
+		}
+		npc.mu.Lock()
+		out = append(out, nativegs2vm.NPCContext{ID: npc.id, Name: npc.npcName, Script: npc.script, This: mergeNPCVMState(npc)})
+		npc.mu.Unlock()
+	}
+	return out
+}
+
+func mergeNPCVMState(npc *NPC) map[string]any {
+	out := make(map[string]any)
+	if npc == nil {
+		return out
+	}
+	for key, value := range npc.vmThis {
+		out[key] = value
+	}
+	for key, value := range npc.flagList {
 		out[key] = value
 	}
 	return out
@@ -600,6 +663,12 @@ func (s *Server) applyGS2VMResult(result gs2VMResult) {
 			player.warp(warp.level, warp.x, warp.y)
 		}
 	}
+	for _, flag := range result.npcFlags {
+		s.applyGS2NPCFlag(flag)
+	}
+	for _, call := range result.npcFunctionCalls {
+		s.applyGS2NPCFunctionCall(result, call)
+	}
 	for _, action := range result.npcActions {
 		s.applyGS2NPCAction(action)
 	}
@@ -642,6 +711,54 @@ func (s *Server) gs2VMRevisionStillCurrent(result gs2VMResult) bool {
 	default:
 		return true
 	}
+}
+
+func (s *Server) applyGS2NPCFlag(flag gs2VMNPCFlag) {
+	npc := s.GetNPC(flag.id)
+	if npc == nil || flag.name == "" {
+		return
+	}
+	npc.mu.Lock()
+	if npc.flagList == nil {
+		npc.flagList = make(map[string]string)
+	}
+	npc.flagList[flag.name] = flag.value
+	if npc.vmThis == nil {
+		npc.vmThis = make(map[string]any)
+	}
+	npc.vmThis[flag.name] = flag.value
+	npc.mu.Unlock()
+	if npc.npcType == DBNPC {
+		if err := s.saveDatabaseNPCFile(npc); err != nil {
+			s.logger.Warning("Failed to save NPC %s flags: %v", npc.npcName, err)
+		}
+	}
+}
+
+func (s *Server) applyGS2NPCFunctionCall(source gs2VMResult, call gs2VMNPCFunctionCall) {
+	npc := s.GetNPC(call.id)
+	if npc == nil || call.function == "" {
+		return
+	}
+	npc.mu.Lock()
+	thisState := copyAnyMap(npc.vmThis)
+	script := npc.script
+	name := npc.npcName
+	id := npc.id
+	revision := npc.vmRevision
+	npc.mu.Unlock()
+	event := call.function
+	next := s.runServerSideGS2NativeWithStateAndSocket("npc", name, event, script, thisState, source.playerContext, id, nil, call.args...)
+	next.vmRevision = revision
+	if next.err != "" {
+		s.sendGS2VMErrorToNC("NPC "+name, next.err)
+		return
+	}
+	s.applyGS2VMResult(next)
+	s.emitGS2VMOutput(next)
+	npc.mu.Lock()
+	npc.vmThis = next.this
+	npc.mu.Unlock()
 }
 
 func (s *Server) applyGS2NPCAction(action gs2VMNPCAction) {

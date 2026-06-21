@@ -573,8 +573,8 @@ func TestNPCServerStartRunsOnInitializedWithJoinedClass(t *testing.T) {
 func TestServerSideLoginLogoutEventsRunActiveScripts(t *testing.T) {
 	server := newLoginTestServer(t)
 	enableTestNPCServer(server)
-	weapon := &Weapon{name: "-events", script: `function onPlayerLogin() { echo("login" SPC player.account); }
-function onPlayerLogout() { echo("logout" SPC player.account); }`}
+	weapon := &Weapon{name: "-events", script: `function onPlayerLogin(pl) { echo("login" SPC pl.account SPC params[0].account); }
+function onPlayerLogout(pl) { echo("logout" SPC pl.account SPC params[0].account); }`}
 	server.AddWeapon(weapon)
 	nc := NewPlayer(nil, server)
 	nc.id = 7
@@ -594,7 +594,7 @@ function onPlayerLogout() { echo("logout" SPC player.account); }`}
 	server.runServerSideEventForActiveScripts("onPlayerLogin", player)
 	server.DeletePlayer(player)
 
-	if !bytes.Contains(nc.outQueue, []byte("login bob")) || !bytes.Contains(nc.outQueue, []byte("logout bob")) {
+	if !bytes.Contains(nc.outQueue, []byte("login bob bob")) || !bytes.Contains(nc.outQueue, []byte("logout bob bob")) {
 		t.Fatalf("login/logout output missing: % X", nc.outQueue)
 	}
 }
@@ -3661,6 +3661,9 @@ func TestRCFileBrowserCDParsesRawFolderAndSendsDirectory(t *testing.T) {
 	if !bytes.Contains(rc.outQueue, append([]byte{PLO_RC_FILEBROWSER_DIR + 32, byte(len("world/levels/")) + 32}, []byte("world/levels/")...)) {
 		t.Fatalf("cd did not send directory packet: % X", rc.outQueue)
 	}
+	if bytes.Contains(rc.outQueue, []byte("Folder changed to")) {
+		t.Fatalf("cd leaked folder changed message: % X", rc.outQueue)
+	}
 }
 
 func TestRCFileBrowserUploadParsesString8FilenameAndRawData(t *testing.T) {
@@ -3721,13 +3724,26 @@ func TestRCFileBrowserUploadReloadsCachedLevel(t *testing.T) {
 		t.Fatalf("initial loadLevel failed")
 	}
 	server.AddLevel(level)
+	client := NewPlayer(fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server)
+	client.id = 4
+	client.queueOutgoing = true
+	client.encryption.SetGen(ENCRYPT_GEN_1)
+	client.levelName = levelName
+	level.players = append(level.players, client.id)
+	server.players[client.id] = client
 
 	packet := append([]byte{PLI_RC_FILEBROWSER_UP, byte(len("live.nw")) + 32}, []byte("live.nw")...)
-	packet = append(packet, []byte("GLEVNW02\n")...)
+	packet = append(packet, []byte("GLEVNW02\nNPC block.png 30 30\nNPCEND\n")...)
 	rc.msgPLI_RC_FILEBROWSER_UP(packet)
 
 	if level.fileVersion != "GLEVNW02" {
 		t.Fatalf("level fileVersion = %q, want GLEVNW02", level.fileVersion)
+	}
+	if len(level.npcs) == 0 {
+		t.Fatalf("uploaded level NPC was not loaded")
+	}
+	if !bytes.Contains(client.outQueue, []byte("block.png")) {
+		t.Fatalf("client did not receive refreshed NPC props: % X", client.outQueue)
 	}
 }
 

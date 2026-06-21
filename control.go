@@ -1756,10 +1756,6 @@ func (p *Player) msgPLI_RC_FILEBROWSER_CD(packet []byte) bool {
 		return true
 	}
 	p.lastFolder = newFolder
-	buf2 := NewBuffer()
-	buf2.WriteByte(PLO_RC_FILEBROWSER_MESSAGE)
-	buf2.Write([]byte("Folder changed to " + p.lastFolder))
-	p.send(buf2)
 	p.sendRCFileBrowserDir(folderMap)
 	return true
 }
@@ -2060,7 +2056,20 @@ func (p *Player) updateUploadedFile(dir, fileName string) {
 		}
 		seen[candidate] = true
 		if level := p.server.GetLevel(candidate); level != nil {
-			level.reload(p.server)
+			if level.reload(p.server) {
+				p.server.resendLevelData(level)
+			}
+		}
+	}
+}
+
+func (s *Server) resendLevelData(level *Level) {
+	if s == nil || level == nil {
+		return
+	}
+	for _, id := range append([]uint16(nil), level.getPlayers()...) {
+		if player, ok := s.players[id]; ok && player != nil && player.conn != nil {
+			player.sendLevelData(level, level.levelName, 0, false, true)
 		}
 	}
 }
