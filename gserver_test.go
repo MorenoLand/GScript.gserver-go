@@ -683,6 +683,37 @@ func TestServerSideWeaponVMErrorUsesCompilerOutputFormat(t *testing.T) {
 	}
 }
 
+func TestServerSideLevelNPCVMErrorIncludesLevelAndPosition(t *testing.T) {
+	server := newLoginTestServer(t)
+	enableTestNPCServer(server)
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	npc := NewNPC(LEVELNPC)
+	npc.id = 91
+	npc.x = 30 * 16
+	npc.y = 30 * 16
+	npc.script = `function onCreated() {
+		showcharacter();
+		this.colors[0] = null.missing;
+	}`
+	npc.level = level
+	level.npcs[npc.id] = npc
+	server.npcs[npc.id] = npc
+	nc := NewPlayer(nil, server)
+	nc.id = 7
+	nc.playerType = PLTYPE_NC
+	nc.accountName = "moondeath"
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+
+	server.runServerSideNPCEventForPlayer(npc, "onCreated", nil)
+
+	if !bytes.Contains(nc.outQueue, append([]byte{PLO_RC_CHAT + 32}, []byte("Compiler error for NPC level npc #91 in onlinestartlocal.nw at 30,30:")...)) {
+		t.Fatalf("missing level NPC compiler error origin: % X", nc.outQueue)
+	}
+}
+
 func TestNPCShutdownStopsServerSideWeaponRuntimeAndScriptDelivery(t *testing.T) {
 	server := newLoginTestServer(t)
 	enableTestNPCServer(server)
@@ -906,6 +937,42 @@ func TestTriggerActionRunsServerSideNPCAction(t *testing.T) {
 	level.npcs[npc.id] = npc
 
 	server.runLevelNPCTriggerAction(player, 0, 53, 71, []string{"Test", "1"})
+
+	if npc.character.chatMessage != "woah" {
+		t.Fatalf("npc chat = %q, want woah", npc.character.chatMessage)
+	}
+}
+
+func TestTriggerActionMatchesLevelNPCGraalCoordinates(t *testing.T) {
+	server := newLoginTestServer(t)
+	enableTestNPCServer(server)
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	server.levels[level.levelName] = level
+	player := NewPlayer(nil, server)
+	player.id = 3
+	player.loaded = true
+	player.levelName = level.levelName
+	player.currentLevel = level
+	player.playerType = PLTYPE_CLIENT3
+	server.players[player.id] = player
+	level.players = []uint16{player.id}
+	npc := NewNPC(LEVELNPC)
+	npc.id = 79
+	npc.npcName = "trigger-test"
+	npc.x = 22 * 16
+	npc.y = 39 * 16
+	npc.width = 32
+	npc.height = 32
+	npc.script = `function onActionTest(value) {
+		chat = "woah";
+		echo("woah" SPC value);
+	}`
+	npc.level = level
+	server.npcs[npc.id] = npc
+	level.npcs[npc.id] = npc
+
+	server.runLevelNPCTriggerAction(player, 0, 45, 79, []string{"Test", "1"})
 
 	if npc.character.chatMessage != "woah" {
 		t.Fatalf("npc chat = %q, want woah", npc.character.chatMessage)
@@ -5019,6 +5086,40 @@ func TestRCDisconnectPlayerClosesTargetConnection(t *testing.T) {
 		if _, err := clientConn.Read(buf); err != nil {
 			return
 		}
+	}
+}
+
+func TestRCPlayerPropsResetDisconnectsTargetBeforeLogoutEvent(t *testing.T) {
+	server := &Server{
+		logger:  NewLogger("", false),
+		players: make(map[uint16]*Player),
+		weapons: map[string]*Weapon{"-events": {
+			name: "-events",
+			script: `function onPlayerLogout(temp.pl) {
+  sendtonc(temp.pl.nick SPC "("@temp.pl.account@"): has gone offline!");
+}`,
+		}},
+	}
+	target := &Player{id: 3, conn: fakeConn{remote: fakeAddr("127.0.0.1:1234")}, server: server, playerType: PLTYPE_CLIENT3, loaded: true}
+	target.accountName = "moondeath"
+	target.character.nickName = "Moon"
+	rc := &Player{id: 4, server: server, playerType: PLTYPE_RC2}
+	rc.accountName = "admin"
+	rc.adminRights = PLPERM_RESETATTRIBUTES
+	nc := &Player{id: 5, server: server, playerType: PLTYPE_RC2 | PLTYPE_NC, queueOutgoing: true, loaded: true}
+	server.players[target.id] = target
+	server.players[rc.id] = rc
+	server.players[nc.id] = nc
+
+	packet := append([]byte{PLI_RC_PLAYERPROPSRESET}, rcCommandAccountPacket("moondeath")...)
+	if !rc.msgPLI_RC_PLAYERPROPSRESET(packet) {
+		t.Fatal("msgPLI_RC_PLAYERPROPSRESET returned false")
+	}
+	if server.GetPlayer(target.id) != nil {
+		t.Fatal("target stayed in server player map")
+	}
+	if !bytes.Contains(nc.outQueue, []byte("Moon (moondeath): has gone offline!")) {
+		t.Fatalf("NC output = %q", string(nc.outQueue))
 	}
 }
 

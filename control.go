@@ -57,6 +57,19 @@ func readRCAccountPayload(packet []byte, packetId byte) string {
 	return sanitizeRCAccountName(string(payload))
 }
 
+func (s *Server) deleteAccountFile(accountName string) {
+	accountName = sanitizeRCAccountName(accountName)
+	if accountName == "" {
+		return
+	}
+	accountPath := "accounts/" + accountName + ".txt"
+	if s != nil && s.config != nil {
+		_ = s.config.DeleteFile(accountPath)
+		return
+	}
+	_ = os.Remove(accountPath)
+}
+
 func readRCString8AccountPayload(packet []byte, packetId byte) string {
 	payload := rcPayload(packet, packetId)
 	if len(payload) == 0 {
@@ -639,19 +652,37 @@ func (p *Player) msgPLI_RC_PLAYERPROPSRESET(packet []byte) bool {
 		if !p.server.accountExists(accountName) {
 			return true
 		}
-		accountPath := "accounts/" + accountName + ".txt"
-		os.Remove(accountPath)
+		p.server.deleteAccountFile(accountName)
 		p.server.logger.Info("%s reset account: %s", p.accountName, accountName)
 		p.server.sendRCChat(p.accountName + " has reset the attributes of account: " + accountName)
 		return true
 	}
-	targetPlayer.resetAccount()
 	if targetPlayer.id != 0 {
 		targetPlayer.sendPacket([]byte{PLO_DISCMESSAGE, 0})
 		targetPlayer.writeString8("Your account was reset by " + p.accountName)
-		targetPlayer.loaded = false
-		p.server.removePlayer(targetPlayer)
+		targetPlayer.mu.Lock()
+		if !targetPlayer.disconnected {
+			targetPlayer.disconnected = true
+			conn := targetPlayer.conn
+			targetPlayer.conn = nil
+			level := targetPlayer.currentLevel
+			targetPlayer.currentLevel = nil
+			targetPlayer.loaded = false
+			targetPlayer.mu.Unlock()
+			if conn != nil {
+				conn.Close()
+			}
+			if level != nil {
+				level.removePlayer(targetPlayer)
+			}
+			p.server.DeletePlayer(targetPlayer)
+		} else {
+			targetPlayer.loaded = false
+			targetPlayer.mu.Unlock()
+		}
 	}
+	targetPlayer.resetAccount()
+	p.server.deleteAccountFile(accountName)
 	p.server.logger.Info("%s reset account: %s", p.accountName, accountName)
 	p.server.sendRCChat(p.accountName + " has reset the attributes of account: " + accountName)
 	return true

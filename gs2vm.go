@@ -523,7 +523,7 @@ func (s *Server) runServerSideNPCEventForPlayer(npc *NPC, eventName string, play
 	result := s.runServerSideGS2NativeWithStateAndSocket("npc", npc.npcName, eventName, npc.script, npc.vmThis, snapshotGS2Player(player), npc.id, nil, eventArgs...)
 	result.vmRevision = npc.vmRevision
 	if result.err != "" {
-		s.sendGS2VMErrorToNC("NPC "+npc.npcName, result.err)
+		s.sendGS2VMErrorToNC(s.gs2NPCErrorOrigin(npc), result.err)
 		return
 	}
 	npc.vmThis = result.this
@@ -537,6 +537,18 @@ func (s *Server) runServerSideNPCEventForPlayer(npc *NPC, eventName string, play
 		s.logger.Info("[GS2:%s] %s", npc.npcName, line)
 		s.sendToNC(line)
 	}
+}
+
+func (s *Server) gs2NPCErrorOrigin(npc *NPC) string {
+	name := strings.TrimSpace(npc.npcName)
+	if name == "" {
+		name = fmt.Sprintf("level npc #%d", npc.id)
+	}
+	origin := "NPC " + name
+	if npc.level != nil && strings.TrimSpace(npc.level.levelName) != "" {
+		origin += fmt.Sprintf(" in %s at %d,%d", npc.level.levelName, int(npc.x)/16, int(npc.y)/16)
+	}
+	return origin
 }
 
 func (s *Server) runLevelNPCTriggerAction(player *Player, npcID uint32, x, y int, parts []string) {
@@ -606,7 +618,22 @@ func npcMatchesTriggerPoint(npc *NPC, x, y int) bool {
 	if height <= 0 {
 		height = 16
 	}
-	return x >= nx && y >= ny && x < nx+width && y < ny+height
+	if x >= nx && y >= ny && x < nx+width && y < ny+height {
+		return true
+	}
+	gx := x / 2
+	gy := y / 2
+	gnx := nx / 16
+	gny := ny / 16
+	gw := width / 16
+	gh := height / 16
+	if gw <= 0 {
+		gw = 1
+	}
+	if gh <= 0 {
+		gh = 1
+	}
+	return gx >= gnx && gy >= gny && gx < gnx+gw && gy < gny+gh
 }
 
 func (s *Server) runServerSideEventForActiveScripts(eventName string, player *Player, eventArgs ...string) {
