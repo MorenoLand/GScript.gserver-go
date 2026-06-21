@@ -703,9 +703,20 @@ func (s *Server) sendGS2VMErrorToNC(origin, text string) {
 func normalizeGS2VMErrorLine(line string) string {
 	line = normalizeCompilerOutputLine(line)
 	lower := strings.ToLower(line)
-	if strings.HasPrefix(lower, "typeerror:") {
-		line = strings.TrimSpace(line[len("TypeError:"):])
+	for {
+		lower = strings.ToLower(line)
+		switch {
+		case strings.HasPrefix(lower, "typeerror:"):
+			line = strings.TrimSpace(line[len("TypeError:"):])
+		case strings.HasPrefix(lower, "syntaxerror:"):
+			line = strings.TrimSpace(line[len("SyntaxError:"):])
+		case strings.HasPrefix(lower, "referenceerror:"):
+			line = strings.TrimSpace(line[len("ReferenceError:"):])
+		default:
+			goto stripped
+		}
 	}
+stripped:
 	if idx := strings.Index(line, " at "); idx >= 0 {
 		if eval := strings.Index(line[idx:], "(<eval>:"); eval >= 0 {
 			evalStart := idx + eval + len("(<eval>:")
