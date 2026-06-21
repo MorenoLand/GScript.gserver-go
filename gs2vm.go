@@ -13,6 +13,7 @@ type gs2VMResult struct {
 	clientTriggers []string
 	playerFlags    []gs2VMPlayerFlag
 	playerMessages []gs2VMPlayerMessage
+	playerWarps    []gs2VMPlayerWarp
 	this           map[string]any
 	err            string
 }
@@ -26,6 +27,13 @@ type gs2VMPlayerFlag struct {
 type gs2VMPlayerMessage struct {
 	account string
 	message string
+}
+
+type gs2VMPlayerWarp struct {
+	account string
+	level   string
+	x       float64
+	y       float64
 }
 
 func (s *Server) runServerSideGS2(scriptType, scriptName, eventName, script string, eventArgs ...string) gs2VMResult {
@@ -68,6 +76,9 @@ func (s *Server) runServerSideGS2NativeWithState(scriptType, scriptName, eventNa
 	for _, message := range result.PlayerMessages {
 		out.playerMessages = append(out.playerMessages, gs2VMPlayerMessage{account: message.Account, message: message.Message})
 	}
+	for _, warp := range result.PlayerWarps {
+		out.playerWarps = append(out.playerWarps, gs2VMPlayerWarp{account: warp.Account, level: warp.Level, x: warp.X, y: warp.Y})
+	}
 	return out
 }
 
@@ -104,10 +115,11 @@ func (s *Server) snapshotGS2Players() []nativegs2vm.PlayerContext {
 	players := s.GetAllPlayers()
 	out := make([]nativegs2vm.PlayerContext, 0, len(players))
 	for _, player := range players {
-		if player == nil || player.accountName == "" || player.playerType&PLTYPE_ANYCLIENT == 0 {
+		account := gs2PlayerAccount(player)
+		if player == nil || account == "" || player.playerType&(PLTYPE_ANYPLAYER|PLTYPE_ANYNC|PLTYPE_NPCSERVER) == 0 {
 			continue
 		}
-		out = append(out, nativegs2vm.PlayerContext{Account: gs2PlayerAccount(player), Nick: player.character.nickName, Nickname: player.character.nickName, Level: player.levelName, Flags: copyStringMap(player.flagList)})
+		out = append(out, nativegs2vm.PlayerContext{Account: account, Nick: player.character.nickName, Nickname: player.character.nickName, Level: player.levelName, Flags: copyStringMap(player.flagList)})
 	}
 	return out
 }
@@ -135,7 +147,7 @@ func (s *Server) findGS2Player(account string) *Player {
 		return nil
 	}
 	for _, player := range s.GetAllPlayers() {
-		if player == nil || player.playerType&PLTYPE_ANYCLIENT == 0 {
+		if player == nil || player.playerType&(PLTYPE_ANYPLAYER|PLTYPE_ANYNC|PLTYPE_NPCSERVER) == 0 {
 			continue
 		}
 		if strings.EqualFold(player.accountName, account) || strings.EqualFold(gs2PlayerAccount(player), account) || strings.EqualFold(player.character.nickName, account) {
@@ -274,6 +286,11 @@ func (s *Server) applyGS2VMResult(result gs2VMResult) {
 	for _, message := range result.playerMessages {
 		if player := s.findGS2Player(message.account); player != nil {
 			s.sendGS2PlayerPM(player, message.message)
+		}
+	}
+	for _, warp := range result.playerWarps {
+		if player := s.findGS2Player(warp.account); player != nil && warp.level != "" {
+			player.warp(warp.level, warp.x, warp.y)
 		}
 	}
 }

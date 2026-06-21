@@ -329,6 +329,32 @@ func TestRunServerSideGS2UsesNativeParamsArray(t *testing.T) {
 	}
 }
 
+func TestServerSideGS2PlayerSetLevel2WarpsPlayer(t *testing.T) {
+	server := newLoginTestServer(t)
+	enableTestNPCServer(server)
+	weapon := &Weapon{name: "-test", script: `function onActionServerside() {
+		setlevel2("inside.nw", 30, 13.5);
+	}`}
+	server.AddWeapon(weapon)
+	player := NewPlayer(nil, server)
+	player.id = 2
+	player.playerType = PLTYPE_CLIENT3
+	player.accountName = "moondeath"
+	player.levelName = "onlinestartlocal.nw"
+	player.queueOutgoing = true
+	player.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[player.id] = player
+
+	server.runServerSideWeaponEventForPlayer(weapon, "onActionServerside", player)
+
+	if player.levelName != "inside.nw" || player.x != 480 || player.y != 216 {
+		t.Fatalf("player warp = level %q x=%d y=%d, want inside.nw 480 216", player.levelName, player.x, player.y)
+	}
+	if !bytes.Contains(player.outQueue, []byte("inside.nw")) {
+		t.Fatalf("warp packet missing level name: % X", player.outQueue)
+	}
+}
+
 func TestServerSideGS2FindPlayerSetsClientFlagsAndSendsPM(t *testing.T) {
 	server := newLoginTestServer(t)
 	server.settings.Set("serverside", "true")
@@ -361,6 +387,40 @@ func TestServerSideGS2FindPlayerSetsClientFlagsAndSendsPM(t *testing.T) {
 	}
 	if !bytes.Contains(player.outQueue, []byte(gtokenizeText("hey there"))) {
 		t.Fatalf("script PM missing from % X", player.outQueue)
+	}
+}
+
+func TestNCWeaponApplyOnCreatedFindsApplyingAccount(t *testing.T) {
+	server := newLoginTestServer(t)
+	enableTestNPCServer(server)
+	nc := NewPlayer(nil, server)
+	nc.id = 3
+	nc.playerType = PLTYPE_NC
+	nc.accountName = "moondeath"
+	nc.character.nickName = "*moondeath"
+	nc.loaded = true
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+	packet := NewBuffer()
+	packet.WriteByte(PLI_NC_WEAPONADD)
+	packet.WriteGChar(byte(len("-gr_movement")))
+	packet.Write([]byte("-gr_movement"))
+	packet.WriteGChar(byte(len("bcalarmclock.png")))
+	packet.Write([]byte("bcalarmclock.png"))
+	packet.Write([]byte(`function onCreated() {
+ temp.foo = findplayer("moondeath");
+ temp.foo.sendpm("kek");
+}`))
+
+	if !nc.msgPLI_NC_WEAPONADD(packet.Bytes()) {
+		t.Fatalf("msgPLI_NC_WEAPONADD returned false")
+	}
+	if bytes.Contains(nc.outQueue, []byte("Compiler error for Weapon -gr_movement:")) {
+		t.Fatalf("unexpected compiler error: % X", nc.outQueue)
+	}
+	if !bytes.Contains(nc.outQueue, []byte(gtokenizeText("kek"))) {
+		t.Fatalf("script PM missing from NC queue: % X", nc.outQueue)
 	}
 }
 
