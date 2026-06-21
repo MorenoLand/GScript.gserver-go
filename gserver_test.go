@@ -3280,6 +3280,52 @@ func TestRCChatOpenCommandsDefaultToOwnAccount(t *testing.T) {
 	}
 }
 
+func TestRCChatNPCDispatchesToDatabaseNPCs(t *testing.T) {
+	server := newLoginTestServer(t)
+	enableTestNPCServer(server)
+	rc := NewPlayer(nil, server)
+	rc.playerType = PLTYPE_RC2
+	rc.id = 2
+	rc.accountName = "moondeath"
+	rc.character.nickName = "Moon"
+	rc.adminRights = PLPERM_WARPTO | PLPERM_NPCCONTROL
+	rc.queueOutgoing = true
+	rc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[rc.id] = rc
+	nc := NewPlayer(nil, server)
+	nc.playerType = PLTYPE_NC
+	nc.id = 4
+	nc.accountName = "(npcserver)"
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+	npc := NewNPC(DBNPC)
+	npc.id = 10000
+	npc.npcName = "DenDB"
+	npc.script = `function onRCChat(cmd, data) {
+		if (cmd == "newrc" && player.hasrightflag("warptoxy")) sendtonc(format("RC Detection: %s (%s)", "RC3", data));
+		if (cmd == "file") player.sendtorc(format("file:%s", data));
+		this.fart = true;
+	}`
+	if !server.AddNPC(npc) {
+		t.Fatalf("AddNPC returned false")
+	}
+
+	rc.msgPLI_RC_CHAT(append([]byte{PLI_RC_CHAT}, []byte("/npc newrc,2015.10.31")...))
+
+	if !bytes.Contains(nc.outQueue, append([]byte{PLO_RC_CHAT + 32}, []byte("RC Detection: RC3 (2015.10.31)")...)) {
+		t.Fatalf("NC did not receive npc rc detection: % X", nc.outQueue)
+	}
+	if fmt.Sprint(npc.vmThis["fart"]) != "true" {
+		t.Fatalf("npc vmThis fart = %v, want true", npc.vmThis["fart"])
+	}
+	rc.outQueue = nil
+	rc.msgPLI_RC_CHAT(append([]byte{PLI_RC_CHAT}, []byte("/npc file,onlinestartlocal.nw")...))
+	if !bytes.Contains(rc.outQueue, append([]byte{PLO_RC_CHAT + 32}, []byte("file:onlinestartlocal.nw")...)) {
+		t.Fatalf("RC did not receive targeted player.sendtorc output: % X", rc.outQueue)
+	}
+}
+
 func TestRCChatNPCShutdownStopsNPCServer(t *testing.T) {
 	server := newLoginTestServer(t)
 	enableTestNPCServer(server)

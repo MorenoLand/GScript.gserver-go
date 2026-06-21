@@ -18,6 +18,9 @@ type gs2VMResult struct {
 	playerFlags      []gs2VMPlayerFlag
 	serverFlags      []gs2VMServerFlag
 	playerMessages   []gs2VMPlayerMessage
+	playerRCMessages []gs2VMPlayerMessage
+	rcMessages       []string
+	ncMessages       []string
 	playerWeapons    []gs2VMPlayerWeapon
 	playerWarps      []gs2VMPlayerWarp
 	npcFlags         []gs2VMNPCFlag
@@ -174,6 +177,11 @@ func (s *Server) runServerSideGS2NativeWithStateAndSocket(scriptType, scriptName
 	for _, message := range result.PlayerMessages {
 		out.playerMessages = append(out.playerMessages, gs2VMPlayerMessage{account: message.Account, message: message.Message})
 	}
+	for _, message := range result.PlayerRCMessages {
+		out.playerRCMessages = append(out.playerRCMessages, gs2VMPlayerMessage{account: message.Account, message: message.Message})
+	}
+	out.rcMessages = append(out.rcMessages, result.RCMessages...)
+	out.ncMessages = append(out.ncMessages, result.NCMessages...)
 	for _, weapon := range result.PlayerWeapons {
 		out.playerWeapons = append(out.playerWeapons, gs2VMPlayerWeapon{account: weapon.Account, name: weapon.Name, add: weapon.Add})
 	}
@@ -215,6 +223,43 @@ func snapshotGS2Player(player *Player) map[string]string {
 	out["nick"] = player.character.nickName
 	out["nickname"] = player.character.nickName
 	out["level"] = player.levelName
+	out["rights"] = strings.Join(gs2RightNames(player.adminRights), ",")
+	out["folders"] = strings.Join(player.folderList, "\n")
+	return out
+}
+
+func gs2RightNames(rights int) []string {
+	pairs := []struct {
+		bit  int
+		name string
+	}{
+		{PLPERM_WARPTO, "warptoxy"},
+		{PLPERM_WARPTOPLAYER, "warptoplayer"},
+		{PLPERM_SUMMON, "warpplayers"},
+		{PLPERM_UPDATELEVEL, "updatelevel"},
+		{PLPERM_DISCONNECT, "disconnectplayers"},
+		{PLPERM_VIEWATTRIBUTES, "viewattributes"},
+		{PLPERM_SETATTRIBUTES, "setattributes"},
+		{PLPERM_SETSELFATTRIBUTES, "setownattributes"},
+		{PLPERM_RESETATTRIBUTES, "resetattributes"},
+		{PLPERM_ADMINMSG, "adminmessage"},
+		{PLPERM_SETRIGHTS, "changerights"},
+		{PLPERM_BAN, "banplayers"},
+		{PLPERM_SETCOMMENTS, "changecomments"},
+		{PLPERM_INVISIBLE, "invisible"},
+		{PLPERM_MODIFYSTAFFACCOUNT, "changestaffaccounts"},
+		{PLPERM_SETSERVERFLAGS, "setserverflags"},
+		{PLPERM_SETSERVEROPTIONS, "changeoptions"},
+		{PLPERM_SETFOLDEROPTIONS, "changefolderconfig"},
+		{PLPERM_SETFOLDERRIGHTS, "changefolderrights"},
+		{PLPERM_NPCCONTROL, "NPC-Control"},
+	}
+	out := make([]string, 0, len(pairs))
+	for _, pair := range pairs {
+		if rights&pair.bit != 0 {
+			out = append(out, pair.name)
+		}
+	}
 	return out
 }
 
@@ -239,7 +284,7 @@ func (s *Server) snapshotGS2Players() []nativegs2vm.PlayerContext {
 		if player == nil || account == "" || player.playerType&(PLTYPE_ANYPLAYER|PLTYPE_ANYNC|PLTYPE_NPCSERVER) == 0 {
 			continue
 		}
-		out = append(out, nativegs2vm.PlayerContext{ID: player.id, Account: account, Nick: player.character.nickName, Nickname: player.character.nickName, Level: player.levelName, Flags: copyStringMap(player.flagList)})
+		out = append(out, nativegs2vm.PlayerContext{ID: player.id, Account: account, Nick: player.character.nickName, Nickname: player.character.nickName, Level: player.levelName, Flags: copyStringMap(player.flagList), Rights: gs2RightNames(player.adminRights), Folders: append([]string(nil), player.folderList...)})
 	}
 	return out
 }
@@ -572,6 +617,44 @@ func (s *Server) serverSideNPCs() []*NPC {
 	return out
 }
 
+func (s *Server) runRCNPCChat(player *Player, payload string) {
+	if s == nil || player == nil || strings.TrimSpace(payload) == "" || !s.npcServerRunning() {
+		return
+	}
+	command := strings.TrimSpace(payload)
+	data := ""
+	if before, after, ok := strings.Cut(command, ","); ok {
+		command = strings.TrimSpace(before)
+		data = strings.TrimSpace(after)
+	}
+	if command == "" {
+		return
+	}
+	for _, npc := range s.serverSideNPCs() {
+		if npc == nil || npc.npcType != DBNPC {
+			continue
+		}
+		npc.mu.Lock()
+		thisState := copyAnyMap(npc.vmThis)
+		script := npc.script
+		name := npc.npcName
+		id := npc.id
+		revision := npc.vmRevision
+		npc.mu.Unlock()
+		result := s.runServerSideGS2NativeWithStateAndSocket("npc", name, "onRCChat", script, thisState, snapshotGS2Player(player), id, nil, command, data)
+		result.vmRevision = revision
+		if result.err != "" {
+			s.sendGS2VMErrorToNC("NPC "+name, result.err)
+			continue
+		}
+		s.applyGS2VMResult(result)
+		s.emitGS2VMOutput(result)
+		npc.mu.Lock()
+		npc.vmThis = result.this
+		npc.mu.Unlock()
+	}
+}
+
 func (s *Server) runServerSideGS2ForPlayer(scriptType, scriptName, eventName, script string, player *Player, eventArgs ...string) gs2VMResult {
 	return s.runServerSideGS2Native(scriptType, scriptName, eventName, script, snapshotGS2Player(player), eventArgs...)
 }
@@ -647,6 +730,17 @@ func (s *Server) applyGS2VMResult(result gs2VMResult) {
 			s.sendGS2PlayerPM(player, message.message)
 		}
 	}
+	for _, message := range result.playerRCMessages {
+		if player := s.findGS2ControlPlayer(message.account); player != nil {
+			player.sendPLO_RC_CHAT(message.message)
+		}
+	}
+	for _, message := range result.rcMessages {
+		s.sendRCChat(message)
+	}
+	for _, message := range result.ncMessages {
+		s.sendToNC(message)
+	}
 	for _, weapon := range result.playerWeapons {
 		if player := s.findGS2Player(weapon.account); player != nil {
 			if weapon.add {
@@ -695,6 +789,21 @@ func (s *Server) applyGS2VMResult(result gs2VMResult) {
 			s.emitGS2VMOutput(next)
 		}(event, result.this)
 	}
+}
+
+func (s *Server) findGS2ControlPlayer(account string) *Player {
+	if s == nil || account == "" {
+		return nil
+	}
+	for _, player := range s.GetAllPlayers() {
+		if player == nil || player.playerType&(PLTYPE_ANYRC|PLTYPE_ANYNC) == 0 {
+			continue
+		}
+		if strings.EqualFold(player.accountName, account) || strings.EqualFold(gs2PlayerAccount(player), account) || strings.EqualFold(player.character.nickName, account) {
+			return player
+		}
+	}
+	return nil
 }
 
 func (s *Server) gs2VMRevisionStillCurrent(result gs2VMResult) bool {

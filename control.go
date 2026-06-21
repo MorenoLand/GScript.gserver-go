@@ -816,6 +816,8 @@ func (p *Player) handleRCCommand(message string) bool {
 		}
 	case "/scripthelp":
 		p.sendScriptHelp(arg)
+	case "/npc":
+		p.server.runRCNPCChat(p, arg)
 	case "/open":
 		if arg == "" {
 			arg = p.accountName
