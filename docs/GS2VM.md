@@ -81,8 +81,8 @@ Implemented object behavior:
 - `player.client.*` and bare `client.*` both refer to client flags on the current player.
 - `player.clientr.*` and bare `clientr.*` both refer to clientr flags on the current player.
 - Assigning `client.` or `clientr.` updates the player's flags and queues the matching flag update packet.
-- `server.` and `serverr.` expose server flags.
-- `serveroptions.` exposes server options by option name.
+- `server.` and `serverr.` expose server flags and assignments update the gserver flag table.
+- `serveroptions.` exposes server options by option name as read-only VM input.
 - `showimg()` creates or updates an image object for the current VM run.
 - `findimg()` returns that image object or `null`.
 - Image objects currently expose at least `index`, `image`, `x`, `y`, and `rotation`.

@@ -223,6 +223,33 @@ func TestRunServerSideGS2ExportsServerFlagsAndOptions(t *testing.T) {
 	}
 }
 
+func TestServerSideGS2AppliesServerFlagMutations(t *testing.T) {
+	server := newLoginTestServer(t)
+	enableTestNPCServer(server)
+	server.SetFlag("server.old", "1")
+	server.settings.Set("staff", "original")
+	weapon := &Weapon{name: "-flags", script: `function onActionServerside() {
+		server.foo = "bar";
+		serverr.secret = "yes";
+		serveroptions.staff = "changed";
+	}`}
+	server.AddWeapon(weapon)
+	player := NewPlayer(nil, server)
+	player.id = 2
+	player.playerType = PLTYPE_CLIENT3
+	player.accountName = "moondeath"
+	server.players[player.id] = player
+
+	server.runServerSideWeaponEventForPlayer(weapon, "onActionServerside", player)
+
+	if server.GetFlag("server.foo") != "bar" || server.GetFlag("serverr.secret") != "yes" {
+		t.Fatalf("server flags: server.foo=%q serverr.secret=%q", server.GetFlag("server.foo"), server.GetFlag("serverr.secret"))
+	}
+	if server.settings.Get("staff") != "original" {
+		t.Fatalf("serveroptions staff mutated to %q", server.settings.Get("staff"))
+	}
+}
+
 func TestTriggerActionServersideWeaponSendsTriggerClient(t *testing.T) {
 	server := &Server{
 		logger:          NewLogger("", false),

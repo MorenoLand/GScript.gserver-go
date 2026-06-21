@@ -15,6 +15,7 @@ type gs2VMResult struct {
 	output         []string
 	clientTriggers []string
 	playerFlags    []gs2VMPlayerFlag
+	serverFlags    []gs2VMServerFlag
 	playerMessages []gs2VMPlayerMessage
 	playerWeapons  []gs2VMPlayerWeapon
 	playerWarps    []gs2VMPlayerWarp
@@ -26,6 +27,11 @@ type gs2VMPlayerFlag struct {
 	account string
 	name    string
 	value   string
+}
+
+type gs2VMServerFlag struct {
+	name  string
+	value string
 }
 
 type gs2VMPlayerMessage struct {
@@ -83,6 +89,9 @@ func (s *Server) runServerSideGS2NativeWithState(scriptType, scriptName, eventNa
 	}
 	for _, flag := range result.PlayerFlags {
 		out.playerFlags = append(out.playerFlags, gs2VMPlayerFlag{account: flag.Account, name: flag.Name, value: flag.Value})
+	}
+	for _, flag := range result.ServerFlags {
+		out.serverFlags = append(out.serverFlags, gs2VMServerFlag{name: flag.Name, value: flag.Value})
 	}
 	for _, message := range result.PlayerMessages {
 		out.playerMessages = append(out.playerMessages, gs2VMPlayerMessage{account: message.Account, message: message.Message})
@@ -415,6 +424,9 @@ func normalizeGS2VMErrorLine(line string) string {
 func (s *Server) applyGS2VMResult(result gs2VMResult) {
 	if s == nil {
 		return
+	}
+	for _, flag := range result.serverFlags {
+		s.SetFlag(flag.name, flag.value)
 	}
 	for _, flag := range result.playerFlags {
 		if player := s.findGS2Player(flag.account); player != nil {
