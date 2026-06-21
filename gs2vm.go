@@ -223,6 +223,7 @@ func snapshotGS2Player(player *Player) map[string]string {
 	out["nick"] = player.character.nickName
 	out["nickname"] = player.character.nickName
 	out["level"] = player.levelName
+	out["dir"] = strconv.Itoa(int(player.character.sprite & 0x03))
 	out["rights"] = strings.Join(gs2RightNames(player.adminRights), ",")
 	out["folders"] = strings.Join(player.folderList, "\n")
 	return out
@@ -284,7 +285,7 @@ func (s *Server) snapshotGS2Players() []nativegs2vm.PlayerContext {
 		if player == nil || account == "" || player.playerType&(PLTYPE_ANYPLAYER|PLTYPE_ANYNC|PLTYPE_NPCSERVER) == 0 {
 			continue
 		}
-		out = append(out, nativegs2vm.PlayerContext{ID: player.id, Account: account, Nick: player.character.nickName, Nickname: player.character.nickName, Level: player.levelName, Flags: copyStringMap(player.flagList), Rights: gs2RightNames(player.adminRights), Folders: append([]string(nil), player.folderList...)})
+		out = append(out, nativegs2vm.PlayerContext{ID: player.id, Account: account, Nick: player.character.nickName, Nickname: player.character.nickName, Level: player.levelName, Dir: int(player.character.sprite & 0x03), Flags: copyStringMap(player.flagList), Rights: gs2RightNames(player.adminRights), Folders: append([]string(nil), player.folderList...)})
 	}
 	return out
 }
