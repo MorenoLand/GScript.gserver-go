@@ -3887,23 +3887,33 @@ func (p *Player) sendPLO_LEVELSIGN(x, y int16, text string) bool {
 func (p *Player) sendPLO_NPCPROPS(npc *NPC) bool {
 	buf := NewBuffer()
 	buf.WriteByte(PLO_NPCPROPS).WriteGInt(uint32(npc.id))
+	buf.WriteGChar(NPCPROP_IMAGE).WriteGChar(byte(len(npc.image))).Write([]byte(npc.image))
+	scriptLen := len(npc.script)
+	if scriptLen > 0x3fff {
+		scriptLen = 0x3fff
+	}
+	buf.WriteGChar(NPCPROP_SCRIPT).WriteGShort(uint16(scriptLen)).Write([]byte(npc.script[:scriptLen]))
 	buf.WriteGChar(NPCPROP_X).WriteGChar(byte(npc.x / 8))
 	buf.WriteGChar(NPCPROP_Y).WriteGChar(byte(npc.y / 8))
-	buf.WriteGChar(NPCPROP_X2).WriteGShort(encodeSignedGShortCoord(npc.x))
-	buf.WriteGChar(NPCPROP_Y2).WriteGShort(encodeSignedGShortCoord(npc.y))
-	if npc.image != "" {
-		buf.WriteGChar(NPCPROP_IMAGE).WriteGChar(byte(len(npc.image))).Write([]byte(npc.image))
-		if npc.visFlags == 0 {
-			buf.WriteGChar(NPCPROP_VISFLAGS).WriteGChar(NPCVISFLAG_VISIBLE)
-		}
+	zTile := npc.z / 16
+	if zTile < -50 {
+		zTile = -50
+	} else if zTile > 170 {
+		zTile = 170
 	}
-	if npc.script != "" {
-		scriptLen := len(npc.script)
-		if scriptLen > 0x3fff {
-			scriptLen = 0x3fff
-		}
-		buf.WriteGChar(NPCPROP_SCRIPT).WriteGShort(uint16(scriptLen)).Write([]byte(npc.script[:scriptLen]))
+	buf.WriteGChar(NPCPROP_Z).WriteGChar(byte(zTile + 50))
+	visFlags := npc.visFlags
+	if visFlags == 0 && (npc.image != "" || npc.script != "") {
+		visFlags = NPCVISFLAG_VISIBLE
 	}
+	buf.WriteGChar(NPCPROP_VISFLAGS).WriteGChar(visFlags)
+	buf.WriteGChar(NPCPROP_ID).WriteGInt(uint32(npc.id))
+	buf.WriteGChar(NPCPROP_SPRITE).WriteGChar(npc.character.sprite)
+	msg := npc.character.chatMessage
+	if len(msg) > 255 {
+		msg = msg[:255]
+	}
+	buf.WriteGChar(NPCPROP_MESSAGE).WriteGChar(byte(len(msg))).Write([]byte(msg))
 	if npc.npcName != "" {
 		buf.WriteGChar(NPCPROP_NICKNAME).WriteGChar(byte(len(npc.npcName))).Write([]byte(npc.npcName))
 	}
@@ -3922,14 +3932,8 @@ func (p *Player) sendPLO_NPCPROPS(npc *NPC) bool {
 	if npc.character.gralats != 0 {
 		buf.WriteGChar(NPCPROP_RUPEES).WriteGInt(uint32(npc.character.gralats))
 	}
-	if npc.visFlags != 0 {
-		buf.WriteGChar(NPCPROP_VISFLAGS).WriteGChar(npc.visFlags)
-	}
 	if npc.blockFlags != 0 {
 		buf.WriteGChar(NPCPROP_BLOCKFLAGS).WriteGChar(npc.blockFlags)
-	}
-	if npc.character.sprite != 0 {
-		buf.WriteGChar(NPCPROP_SPRITE).WriteGChar(npc.character.sprite)
 	}
 	if npc.character.horseImage != "" {
 		buf.WriteGChar(NPCPROP_HORSEIMAGE).WriteGChar(byte(len(npc.character.horseImage))).Write([]byte(npc.character.horseImage))
@@ -3940,13 +3944,9 @@ func (p *Player) sendPLO_NPCPROPS(npc *NPC) bool {
 	if npc.character.bodyImage != "" {
 		buf.WriteGChar(NPCPROP_BODYIMAGE).WriteGChar(byte(len(npc.character.bodyImage))).Write([]byte(npc.character.bodyImage))
 	}
-	if npc.character.chatMessage != "" {
-		msg := npc.character.chatMessage
-		if len(msg) > 255 {
-			msg = msg[:255]
-		}
-		buf.WriteGChar(NPCPROP_MESSAGE).WriteGChar(byte(len(msg))).Write([]byte(msg))
-	}
+	buf.WriteGChar(NPCPROP_X2).WriteGShort(encodeSignedGShortCoord(npc.x))
+	buf.WriteGChar(NPCPROP_Y2).WriteGShort(encodeSignedGShortCoord(npc.y))
+	buf.WriteGChar(NPCPROP_Z2).WriteGShort(encodeSignedGShortCoord(npc.z))
 	p.send(buf)
 	return true
 }
@@ -6956,7 +6956,7 @@ func (l *Level) loadNW(server *Server, levelName string) bool {
 				script.WriteString(lines[i] + "\n")
 				i++
 			}
-			npc := &NPC{npcType: LEVELNPC, x: int16(npcx * 16), y: int16(npcy * 16), z: 0, image: image, script: script.String(), level: l, saves: [10]byte{}}
+			npc := &NPC{npcType: LEVELNPC, x: int16(npcx * 16), y: int16(npcy * 16), z: 0, image: image, script: script.String(), visFlags: NPCVISFLAG_VISIBLE, level: l, saves: [10]byte{}}
 			if server.AddNPC(npc) {
 				l.npcs[npc.id] = npc
 				server.runServerSideNPCEventForPlayer(npc, "onCreated", nil)

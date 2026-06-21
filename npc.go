@@ -32,7 +32,7 @@ type NPC struct {
 }
 
 func NewNPC(npcType NPCType) *NPC {
-	return &NPC{id: 0, npcType: npcType, x: 30 * 16, y: 30 * 16, z: 0, saves: [10]byte{}, flagList: make(map[string]string), level: nil}
+	return &NPC{id: 0, npcType: npcType, x: 30 * 16, y: 30 * 16, z: 0, visFlags: NPCVISFLAG_VISIBLE, saves: [10]byte{}, flagList: make(map[string]string), level: nil}
 }
 func (n *NPC) setId(id uint32) { n.id = id }
 func (n *NPC) getId() uint32   { return n.id }
