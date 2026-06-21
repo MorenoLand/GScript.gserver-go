@@ -1142,6 +1142,9 @@ func (s *Server) DeletePlayer(player *Player) {
 	if !existed {
 		return
 	}
+	if player.playerType&PLTYPE_ANYCLIENT != 0 {
+		s.runServerSideEventForActiveScripts("onPlayerLogout", player)
+	}
 	for _, serverList := range s.serverLists {
 		if serverList != nil {
 			serverList.DeletePlayer(player)
@@ -2359,6 +2362,7 @@ func (p *Player) processPackets() {
 			}
 			if p.playerType&PLTYPE_ANYCLIENT != 0 {
 				p.sendPostLoginTail()
+				p.server.runServerSideEventForActiveScripts("onPlayerLogin", p)
 			} else if p.playerType&PLTYPE_ANYRC != 0 {
 				p.sendRCPostLoginTail()
 			} else if p.playerType&PLTYPE_ANYNC != 0 {

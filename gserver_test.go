@@ -455,6 +455,85 @@ func TestNCWeaponApplyReportsUpdateBeforeServerSideOutput(t *testing.T) {
 	}
 }
 
+func TestNPCServerStartRunsOnInitializedWithJoinedClass(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.settings.Set("serverside", "true")
+	server.classes["bob"] = &ScriptClass{name: "bob", script: `function onInitialized() { echo("class init"); }`}
+	server.AddWeapon(&Weapon{name: "-init", script: `join bob;`})
+	nc := NewPlayer(nil, server)
+	nc.id = 7
+	nc.playerType = PLTYPE_NC
+	nc.accountName = "moondeath"
+	nc.loaded = true
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+
+	server.initNPCServer()
+
+	if !bytes.Contains(nc.outQueue, append([]byte{PLO_RC_CHAT + 32}, []byte("class init")...)) {
+		t.Fatalf("onInitialized class output missing: % X", nc.outQueue)
+	}
+}
+
+func TestServerSideLoginLogoutEventsRunActiveScripts(t *testing.T) {
+	server := newLoginTestServer(t)
+	enableTestNPCServer(server)
+	weapon := &Weapon{name: "-events", script: `function onPlayerLogin() { echo("login" SPC player.account); }
+function onPlayerLogout() { echo("logout" SPC player.account); }`}
+	server.AddWeapon(weapon)
+	nc := NewPlayer(nil, server)
+	nc.id = 7
+	nc.playerType = PLTYPE_NC
+	nc.accountName = "moondeath"
+	nc.loaded = true
+	nc.queueOutgoing = true
+	nc.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[nc.id] = nc
+	player := NewPlayer(nil, server)
+	player.id = 4
+	player.playerType = PLTYPE_CLIENT3
+	player.accountName = "bob"
+	player.loaded = true
+	server.players[player.id] = player
+
+	server.runServerSideEventForActiveScripts("onPlayerLogin", player)
+	server.DeletePlayer(player)
+
+	if !bytes.Contains(nc.outQueue, []byte("login bob")) || !bytes.Contains(nc.outQueue, []byte("logout bob")) {
+		t.Fatalf("login/logout output missing: % X", nc.outQueue)
+	}
+}
+
+func TestServerSideAddRemoveWeaponActionsMutatePlayer(t *testing.T) {
+	server := newLoginTestServer(t)
+	enableTestNPCServer(server)
+	server.AddWeapon(&Weapon{name: "-grant", script: "function onCreated() {}"})
+	weapon := &Weapon{name: "-giver", script: `function onActionServerside() {
+		addweapon("-grant");
+		removeweapon("-old");
+	}`}
+	server.AddWeapon(weapon)
+	player := NewPlayer(nil, server)
+	player.id = 4
+	player.playerType = PLTYPE_CLIENT3
+	player.accountName = "bob"
+	player.weaponList = []string{"-old"}
+	player.loaded = true
+	player.queueOutgoing = true
+	player.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[player.id] = player
+
+	server.runServerSideWeaponEventForPlayer(weapon, "onActionServerside", player)
+
+	if !player.hasAccountWeapon("-grant") || player.hasAccountWeapon("-old") {
+		t.Fatalf("weaponList = %#v", player.weaponList)
+	}
+	if !bytes.Contains(player.outQueue, []byte("-old")) {
+		t.Fatalf("remove weapon packet missing: % X", player.outQueue)
+	}
+}
+
 func TestServerSideWeaponPersistsThisButNotTemp(t *testing.T) {
 	server := newLoginTestServer(t)
 	enableTestNPCServer(server)

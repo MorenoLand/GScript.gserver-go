@@ -26,6 +26,7 @@ type NPC struct {
 	character                     Character
 	weaponName                    string
 	scriptData                    string
+	vmThis                        map[string]any
 	level                         *Level
 }
 

@@ -2,17 +2,21 @@ package main
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
 	nativegs2vm "github.com/MorenoLand/GScript.gs2vm-go"
 )
 
+var gs2JoinPattern = regexp.MustCompile(`(?im)^\s*join\s*(?:\(\s*["']?([^"')\s;]+)["']?\s*\)|["']?([^"'\s;]+)["']?)\s*;?\s*$`)
+
 type gs2VMResult struct {
 	output         []string
 	clientTriggers []string
 	playerFlags    []gs2VMPlayerFlag
 	playerMessages []gs2VMPlayerMessage
+	playerWeapons  []gs2VMPlayerWeapon
 	playerWarps    []gs2VMPlayerWarp
 	this           map[string]any
 	err            string
@@ -27,6 +31,12 @@ type gs2VMPlayerFlag struct {
 type gs2VMPlayerMessage struct {
 	account string
 	message string
+}
+
+type gs2VMPlayerWeapon struct {
+	account string
+	name    string
+	add     bool
 }
 
 type gs2VMPlayerWarp struct {
@@ -49,6 +59,7 @@ func (s *Server) runServerSideGS2NativeWithState(scriptType, scriptName, eventNa
 	if strings.TrimSpace(src) == "" {
 		return gs2VMResult{}
 	}
+	src = s.expandJoinedClasses(src, nil)
 	if playerContext == nil {
 		playerContext = make(map[string]string)
 	}
@@ -75,6 +86,9 @@ func (s *Server) runServerSideGS2NativeWithState(scriptType, scriptName, eventNa
 	}
 	for _, message := range result.PlayerMessages {
 		out.playerMessages = append(out.playerMessages, gs2VMPlayerMessage{account: message.Account, message: message.Message})
+	}
+	for _, weapon := range result.PlayerWeapons {
+		out.playerWeapons = append(out.playerWeapons, gs2VMPlayerWeapon{account: weapon.Account, name: weapon.Name, add: weapon.Add})
 	}
 	for _, warp := range result.PlayerWarps {
 		out.playerWarps = append(out.playerWarps, gs2VMPlayerWarp{account: warp.Account, level: warp.Level, x: warp.X, y: warp.Y})
@@ -193,6 +207,65 @@ func serversideGS2(script string) string {
 	return normalized
 }
 
+func (s *Server) expandJoinedClasses(script string, seen map[string]bool) string {
+	if s == nil || strings.TrimSpace(script) == "" {
+		return script
+	}
+	if seen == nil {
+		seen = make(map[string]bool)
+	}
+	var joins []string
+	cleaned := gs2JoinPattern.ReplaceAllStringFunc(script, func(line string) string {
+		match := gs2JoinPattern.FindStringSubmatch(line)
+		if len(match) > 2 {
+			name := strings.TrimSpace(match[1])
+			if name == "" {
+				name = strings.TrimSpace(match[2])
+			}
+			if name != "" {
+				joins = append(joins, name)
+			}
+		}
+		return ""
+	})
+	var out strings.Builder
+	out.WriteString(cleaned)
+	for _, name := range joins {
+		key := strings.ToLower(name)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		classObj := s.GetClass(name)
+		if classObj == nil || strings.TrimSpace(classObj.script) == "" {
+			continue
+		}
+		out.WriteString("\n")
+		out.WriteString(s.expandJoinedClasses(classObj.script, seen))
+	}
+	return out.String()
+}
+
+func (s *Server) GetClass(name string) *ScriptClass {
+	if s == nil || strings.TrimSpace(name) == "" {
+		return nil
+	}
+	s.weaponMu.RLock()
+	defer s.weaponMu.RUnlock()
+	if classObj := s.classes[name]; classObj != nil {
+		return classObj
+	}
+	if classObj := s.classes[strings.ToLower(name)]; classObj != nil {
+		return classObj
+	}
+	for _, classObj := range s.classes {
+		if classObj != nil && strings.EqualFold(classObj.name, name) {
+			return classObj
+		}
+	}
+	return nil
+}
+
 func (s *Server) runServerSideWeaponEvent(weapon *Weapon, eventName string) {
 	s.runServerSideWeaponEventForPlayer(weapon, eventName, nil)
 }
@@ -220,6 +293,72 @@ func (s *Server) runServerSideWeaponEventForPlayer(weapon *Weapon, eventName str
 		s.logger.Info("[GS2:%s] %s", weapon.name, line)
 		s.sendToNC(line)
 	}
+}
+
+func (s *Server) runServerSideNPCEventForPlayer(npc *NPC, eventName string, player *Player, eventArgs ...string) {
+	if s == nil || npc == nil || npc.script == "" || !s.npcServerRunning() {
+		return
+	}
+	result := s.runServerSideGS2NativeWithState("npc", npc.npcName, eventName, npc.script, npc.vmThis, snapshotGS2Player(player), eventArgs...)
+	if result.err != "" {
+		s.sendGS2VMErrorToNC("NPC "+npc.npcName, result.err)
+		return
+	}
+	npc.vmThis = result.this
+	s.applyGS2VMResult(result)
+	if player != nil {
+		for _, action := range result.clientTriggers {
+			player.sendPLO_TRIGGERACTION(0, 0, 0, 0, action)
+		}
+	}
+	for _, line := range result.output {
+		s.logger.Info("[GS2:%s] %s", npc.npcName, line)
+		s.sendToNC(line)
+	}
+}
+
+func (s *Server) runServerSideEventForActiveScripts(eventName string, player *Player, eventArgs ...string) {
+	if s == nil || !s.npcServerRunning() {
+		return
+	}
+	for _, weapon := range s.serverSideWeapons() {
+		s.runServerSideWeaponEventForPlayer(weapon, eventName, player, eventArgs...)
+	}
+	for _, npc := range s.serverSideNPCs() {
+		s.runServerSideNPCEventForPlayer(npc, eventName, player, eventArgs...)
+	}
+}
+
+func (s *Server) serverSideWeapons() []*Weapon {
+	if s == nil {
+		return nil
+	}
+	s.weaponMu.RLock()
+	defer s.weaponMu.RUnlock()
+	out := make([]*Weapon, 0, len(s.weapons))
+	seen := make(map[*Weapon]bool, len(s.weapons))
+	for _, weapon := range s.weapons {
+		if weapon != nil && !weapon.defPlayer && strings.TrimSpace(weapon.script) != "" && !seen[weapon] {
+			out = append(out, weapon)
+			seen[weapon] = true
+		}
+	}
+	return out
+}
+
+func (s *Server) serverSideNPCs() []*NPC {
+	if s == nil {
+		return nil
+	}
+	s.npcMu.RLock()
+	defer s.npcMu.RUnlock()
+	out := make([]*NPC, 0, len(s.npcs))
+	for _, npc := range s.npcs {
+		if npc != nil && npc.npcType == DBNPC && strings.TrimSpace(npc.script) != "" {
+			out = append(out, npc)
+		}
+	}
+	return out
 }
 
 func (s *Server) runServerSideGS2ForPlayer(scriptType, scriptName, eventName, script string, player *Player, eventArgs ...string) gs2VMResult {
@@ -286,6 +425,17 @@ func (s *Server) applyGS2VMResult(result gs2VMResult) {
 	for _, message := range result.playerMessages {
 		if player := s.findGS2Player(message.account); player != nil {
 			s.sendGS2PlayerPM(player, message.message)
+		}
+	}
+	for _, weapon := range result.playerWeapons {
+		if player := s.findGS2Player(weapon.account); player != nil {
+			if weapon.add {
+				player.addWeapon(weapon.name)
+				player.sendAccountWeapon(weapon.name)
+			} else {
+				player.deleteWeapon(weapon.name)
+				player.sendPLO_NPCWEAPONDEL(weapon.name)
+			}
 		}
 	}
 	for _, warp := range result.playerWarps {

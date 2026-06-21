@@ -21,6 +21,8 @@ Server-side GS2 runtime notes for the NPC-server-backed VM. This document tracks
 - NC Apply saves the submitted script text exactly as sent, including indentation, blank lines, spacing, and section marker placement.
 - Reapplying a weapon/class/NPC script resets that script's `this.` state and recompiles/sends client bytecode where applicable.
 - Player login compiles and sends weapons the player already has when the NPC-server is online.
+- `join className;` and `join("className");` append server-side class code into a weapon or DB NPC runtime.
+- Classes do not execute on their own; class code runs only through a weapon or DB NPC that joins it.
 
 ## Event Runtime
 
@@ -32,6 +34,9 @@ Server-side GS2 runtime notes for the NPC-server-backed VM. This document tracks
 - `params` is the current trigger/event argument list.
 - `params[0]` and normal indexed access work.
 - Event lookup is case-insensitive for `on...` handlers.
+- `onCreated()` runs when a weapon or DB NPC script is applied/updated.
+- `onInitialized()` runs when the NPC-server starts.
+- `onPlayerLogin()` and `onPlayerLogout()` run for active weapon and DB NPC server-side scripts.
 - `SPC` concatenates values with a single space.
 - `@` concatenates values without adding a space.
 - `@=` appends to strings.
@@ -94,6 +99,8 @@ Implemented object behavior:
 - `setlevel(level)` warps the player object to a level.
 - `setlevel2(level, x, y)` warps the player object to a level at tile coordinates.
 - Bare `setlevel(level)` and `setlevel2(level, x, y)` target the player that triggered the current server-side event.
+- Bare `addweapon(name)` and `removeweapon(name)` target the player that triggered the current server-side event.
+- Player objects returned by `findplayer()` support `addweapon(name)` and `removeweapon(name)`.
 - PMs sent from server-side scripts are sent as NPC-Server messages.
 
 Supported forms:
@@ -136,7 +143,7 @@ Preferred style:
 
 - More player object properties: position, chat, hearts, rupees, bombs, arrows, head, body, sword, shield, gani, attr, and account metadata.
 - More player methods: freeze/unfreeze, rights helpers, and scripted stat/item helpers.
-- Class and NPC-db state.
+- Broader class and NPC-db state.
 - Timers, waits, `scheduleevent`, and delayed event dispatch.
 - `getstringkeys()` for persistent variable prefixes.
 - Full drawing/image object parity beyond the current lightweight `showimg`/`findimg` object.

@@ -129,6 +129,7 @@ func (n *NPCServer) Start() *Player {
 	}
 	n.host.broadcastPlayerListEntryToClients(p)
 	n.host.updateAllWeaponsForPlayers()
+	n.host.runServerSideEventForActiveScripts("onInitialized", p)
 	n.host.logger.Info("NPC-Server initialized (id=%d account=%s nickname=%s type=%d x=%d y=%d)", p.id, p.accountName, p.character.nickName, p.playerType, int(p.x), int(p.y))
 	return p
 }

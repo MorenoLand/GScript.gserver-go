@@ -167,6 +167,7 @@ func (p *Player) msgPLI_NC_NPCSCRIPTSET(packet []byte) bool {
 		logMsg := fmt.Sprintf("NPC script of %s updated by %s", npc.npcName, p.accountName)
 		p.server.logger.Info(logMsg)
 		p.server.sendToNC(logMsg)
+		p.server.runServerSideNPCEventForPlayer(npc, "onCreated", p)
 	}
 	return true
 }
