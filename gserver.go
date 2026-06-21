@@ -3918,8 +3918,12 @@ func (p *Player) sendPLO_NPCPROPS(npc *NPC) bool {
 		msg = msg[:255]
 	}
 	buf.WriteGChar(NPCPROP_MESSAGE).WriteGChar(byte(len(msg))).Write([]byte(msg))
-	if npc.npcName != "" {
-		buf.WriteGChar(NPCPROP_NICKNAME).WriteGChar(byte(len(npc.npcName))).Write([]byte(npc.npcName))
+	nick := npc.character.nickName
+	if nick == "" {
+		nick = npc.npcName
+	}
+	if nick != "" {
+		buf.WriteGChar(NPCPROP_NICKNAME).WriteGChar(byte(len(nick))).Write([]byte(nick))
 	}
 	if npc.character.gani != "" {
 		buf.WriteGChar(NPCPROP_GANI).WriteGChar(byte(len(npc.character.gani))).Write([]byte(npc.character.gani))
@@ -3935,6 +3939,18 @@ func (p *Player) sendPLO_NPCPROPS(npc *NPC) bool {
 	}
 	if npc.character.gralats != 0 {
 		buf.WriteGChar(NPCPROP_RUPEES).WriteGInt(uint32(npc.character.gralats))
+	}
+	if npc.character.swordPower != 0 || npc.character.swordImage != "" {
+		buf.WriteGChar(NPCPROP_SWORDIMAGE).WriteGChar(byte(npc.character.swordPower + 30)).WriteGChar(byte(len(npc.character.swordImage))).Write([]byte(npc.character.swordImage))
+	}
+	if npc.character.shieldPower != 0 || npc.character.shieldImage != "" {
+		buf.WriteGChar(NPCPROP_SHIELDIMAGE).WriteGChar(byte(npc.character.shieldPower + 10)).WriteGChar(byte(len(npc.character.shieldImage))).Write([]byte(npc.character.shieldImage))
+	}
+	if npc.character.colors != [5]byte{} {
+		buf.WriteGChar(NPCPROP_COLORS)
+		for _, color := range npc.character.colors {
+			buf.WriteGChar(color)
+		}
 	}
 	if npc.blockFlags != 0 {
 		buf.WriteGChar(NPCPROP_BLOCKFLAGS).WriteGChar(npc.blockFlags)
@@ -5032,6 +5048,7 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 	commonBuff := NewBuffer()
 	legacyMoveBuff := NewBuffer()
 	preciseMoveBuff := NewBuffer()
+	moved := false
 	for buf.BytesLeft() > 0 {
 		propId := buf.ReadGChar()
 		propConsumed := false
@@ -5095,12 +5112,15 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 		case PLPROP_X:
 			p.x = int16(buf.ReadGChar()) * 8
 			p.markMovement()
+			moved = true
 		case PLPROP_Y:
 			p.y = int16(buf.ReadGChar()) * 8
 			p.markMovement()
+			moved = true
 		case PLPROP_Z:
 			p.z = (int16(buf.ReadGChar()) - 50) * 8
 			p.markMovement()
+			moved = true
 		case PLPROP_CURLEVEL:
 			p.levelName = buf.ReadGCharString()
 		case PLPROP_SPRITE:
@@ -5181,12 +5201,15 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 		case PLPROP_X2:
 			p.x = decodeSignedGShortCoord(buf.ReadGShort())
 			p.markMovement()
+			moved = true
 		case PLPROP_Y2:
 			p.y = decodeSignedGShortCoord(buf.ReadGShort())
 			p.markMovement()
+			moved = true
 		case PLPROP_Z2:
 			p.z = decodeSignedGShortCoord(buf.ReadGShort())
 			p.markMovement()
+			moved = true
 		case PLPROP_UNKNOWN81:
 			_ = buf.ReadGChar()
 		case PLPROP_COMMUNITYNAME:
@@ -5203,6 +5226,9 @@ func (p *Player) msgPLI_PLAYERPROPS(packet []byte) bool {
 	if p.isLoggedIn() && p.loaded && (commonBuff.Len() > 0 || legacyMoveBuff.Len() > 0 || preciseMoveBuff.Len() > 0) {
 		p.server.logger.Debug("msgPLI_PLAYERPROPS: Forwarding changed props common=%d legacyMove=%d preciseMove=%d to level %s", commonBuff.Len(), legacyMoveBuff.Len(), preciseMoveBuff.Len(), p.levelName)
 		p.sendPlayerPropDeltasToCurrentLevel(commonBuff.Bytes(), legacyMoveBuff.Bytes(), preciseMoveBuff.Bytes())
+	}
+	if moved {
+		p.runServerSideNPCTouchTest()
 	}
 	p.server.logger.Debug("msgPLI_PLAYERPROPS: Done processing")
 	return true
@@ -5590,6 +5616,9 @@ func (p *Player) msgPLI_PUTNPC(packet []byte) bool {
 	return true
 }
 func (p *Player) msgPLI_NPCDEL(packet []byte) bool {
+	if p.server != nil && p.server.settings != nil && p.server.settings.GetBool("serverside", false) {
+		return true
+	}
 	buf := NewBufferFromBytes(packet[1:])
 	npcId := buf.ReadGInt()
 	if level, ok := p.server.levels[p.levelName]; ok {
@@ -8697,6 +8726,11 @@ func (p *Player) sendFile(fileName string) {
 		p.sendPLO_FILESENDFAILED(fileName)
 		return
 	}
+	if !validClientFileSignature(fileName, data) {
+		p.server.logger.Warning("sendFile: Refusing to send %s from %s because its bytes do not match the extension", fileName, resolvedName)
+		p.sendPLO_FILESENDFAILED(fileName)
+		return
+	}
 	modTime := time.Time{}
 	if p.server != nil && p.server.config != nil {
 		modTime, _ = p.server.config.FileModTime(resolvedName)
@@ -8720,6 +8754,19 @@ func (p *Player) sendFile(fileName string) {
 	buf.Write(filePacket.Bytes())
 	p.sendPacket(buf.Bytes())
 	p.server.logger.Debug("sendFile: Sent %s (%d bytes)", fileName, len(data))
+}
+
+func validClientFileSignature(fileName string, data []byte) bool {
+	switch strings.ToLower(filepath.Ext(fileName)) {
+	case ".png":
+		return bytes.HasPrefix(data, []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a})
+	case ".gif":
+		return bytes.HasPrefix(data, []byte("GIF87a")) || bytes.HasPrefix(data, []byte("GIF89a"))
+	case ".mng":
+		return bytes.HasPrefix(data, []byte{0x8a, 'M', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a})
+	default:
+		return true
+	}
 }
 
 func (s *Server) resolveRequestedFile(fileName string) (string, []byte, error) {

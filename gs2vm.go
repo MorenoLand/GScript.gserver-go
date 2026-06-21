@@ -569,6 +569,29 @@ func (s *Server) runLevelNPCTriggerAction(player *Player, npcID uint32, x, y int
 	}
 }
 
+func (p *Player) runServerSideNPCTouchTest() {
+	if p == nil || p.server == nil || !p.server.npcServerRunning() {
+		return
+	}
+	level := p.currentLevel
+	if level == nil {
+		level = p.server.GetLevel(cleanLevelName(p.levelName))
+	}
+	if level == nil {
+		return
+	}
+	offsets := [...]int{24, 16, 0, 32, 24, 56, 48, 32}
+	dir := int(p.character.sprite % 4)
+	x := int(p.x) + offsets[dir*2]
+	y := int(p.y) + offsets[dir*2+1]
+	for _, npc := range level.npcs {
+		if npc == nil || strings.TrimSpace(npc.script) == "" || !npcMatchesTriggerPoint(npc, x, y) {
+			continue
+		}
+		p.server.runServerSideNPCEventForPlayer(npc, "onPlayerTouchsMe", p)
+	}
+}
+
 func npcMatchesTriggerPoint(npc *NPC, x, y int) bool {
 	if npc == nil {
 		return false
@@ -902,7 +925,6 @@ func (s *Server) applyGS2NPCAction(action gs2VMNPCAction) {
 	moved := action.moveDX != 0 || action.moveDY != 0 || action.moveTime != 0 || action.moveOptions != 0
 	npc.mu.Lock()
 	if action.shapeType > 0 {
-		npc.blockFlags = byte(action.shapeType)
 		npc.width = action.width
 		npc.height = action.height
 	}
@@ -955,6 +977,8 @@ func (s *Server) applyGS2NPCPropsLocked(npc *NPC, props map[string]string) {
 			npc.image = value
 		case "chat", "message":
 			npc.character.chatMessage = value
+		case "nick", "nickname":
+			npc.character.nickName = value
 		case "ani", "gani":
 			npc.character.gani = value
 		case "dir":
@@ -970,6 +994,11 @@ func (s *Server) applyGS2NPCPropsLocked(npc *NPC, props map[string]string) {
 			npc.character.shieldImage = value
 		case "horse":
 			npc.character.horseImage = value
+		case "colors":
+			parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' })
+			for i := 0; i < len(parts) && i < len(npc.character.colors); i++ {
+				npc.character.colors[i] = byte(gs2ColorID(parts[i]))
+			}
 		case "hearts":
 			npc.character.hitpoints = int(parseGS2Float(value))
 		case "gralats":
@@ -982,7 +1011,42 @@ func (s *Server) applyGS2NPCPropsLocked(npc *NPC, props map[string]string) {
 			npc.character.glovePower = parseGS2Int(value)
 		case "ap":
 			npc.character.ap = parseGS2Int(value)
+		case "swordpower":
+			npc.character.swordPower = parseGS2Int(value)
+		case "shieldpower":
+			npc.character.shieldPower = parseGS2Int(value)
+		case "width":
+			npc.width = parseGS2Int(value)
+		case "height":
+			npc.height = parseGS2Int(value)
 		}
+	}
+}
+
+func gs2ColorID(value string) int {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "white":
+		return 0
+	case "yellow":
+		return 1
+	case "orange":
+		return 2
+	case "pink":
+		return 3
+	case "red":
+		return 5
+	case "darkred", "dark red":
+		return 5
+	case "green":
+		return 6
+	case "blue":
+		return 8
+	case "lightblue", "light blue":
+		return 9
+	case "black":
+		return 21
+	default:
+		return parseGS2Int(value)
 	}
 }
 

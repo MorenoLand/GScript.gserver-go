@@ -802,12 +802,16 @@ func TestApplyGS2NPCActionAppliesCorePropsAndState(t *testing.T) {
 	server.applyGS2NPCAction(gs2VMNPCAction{
 		id: npc.id,
 		props: map[string]string{
-			"image": "block.png",
-			"chat":  "hi",
-			"dir":   "1",
-			"head":  "head1.png",
-			"body":  "body.png",
-			"bombs": "4",
+			"image":       "block.png",
+			"chat":        "hi",
+			"nick":        "Bob",
+			"dir":         "1",
+			"head":        "head1.png",
+			"body":        "body.png",
+			"shield":      "shield1.png",
+			"shieldpower": "1",
+			"colors":      "orange,white,blue,red,black",
+			"bombs":       "4",
 		},
 		flags:         map[string]string{"canbecarried": "true", "canbepushed": "false"},
 		hasVisFlags:   true,
@@ -816,14 +820,121 @@ func TestApplyGS2NPCActionAppliesCorePropsAndState(t *testing.T) {
 		blockFlags:    1,
 	})
 
-	if npc.image != "block.png" || npc.character.chatMessage != "hi" || npc.character.sprite != 1 || npc.character.headImage != "head1.png" || npc.character.bodyImage != "body.png" || npc.character.bombs != 4 {
-		t.Fatalf("npc props = image %q chat %q sprite %d head %q body %q bombs %d", npc.image, npc.character.chatMessage, npc.character.sprite, npc.character.headImage, npc.character.bodyImage, npc.character.bombs)
+	if npc.image != "block.png" || npc.character.chatMessage != "hi" || npc.character.nickName != "Bob" || npc.character.sprite != 1 || npc.character.headImage != "head1.png" || npc.character.bodyImage != "body.png" || npc.character.shieldImage != "shield1.png" || npc.character.shieldPower != 1 || npc.character.bombs != 4 {
+		t.Fatalf("npc props = image %q chat %q nick %q sprite %d head %q body %q shield %q shieldpower %d bombs %d", npc.image, npc.character.chatMessage, npc.character.nickName, npc.character.sprite, npc.character.headImage, npc.character.bodyImage, npc.character.shieldImage, npc.character.shieldPower, npc.character.bombs)
+	}
+	if npc.character.colors != [5]byte{2, 0, 8, 5, 21} {
+		t.Fatalf("npc colors = %#v", npc.character.colors)
 	}
 	if npc.visFlags != 3 || npc.blockFlags != 1 {
 		t.Fatalf("npc flags = vis %d block %d", npc.visFlags, npc.blockFlags)
 	}
 	if npc.flagList["canbecarried"] != "true" || npc.flagList["canbepushed"] != "false" {
 		t.Fatalf("npc flagList = %#v", npc.flagList)
+	}
+}
+
+func TestPlayerMovementRunsServerSideNPCPlayerTouchsMe(t *testing.T) {
+	server := newLoginTestServer(t)
+	enableTestNPCServer(server)
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	server.levels[level.levelName] = level
+	player := NewPlayer(nil, server)
+	player.id = 3
+	player.loaded = true
+	player.levelName = level.levelName
+	player.currentLevel = level
+	player.playerType = PLTYPE_CLIENT3
+	player.character.sprite = 0
+	player.x = 0
+	player.y = 0
+	server.players[player.id] = player
+	level.players = []uint16{player.id}
+	npc := NewNPC(LEVELNPC)
+	npc.id = 77
+	npc.npcName = "touch-test"
+	npc.x = 24
+	npc.y = 16
+	npc.script = `function onPlayerTouchsMe() {
+		chat = "virus";
+	}`
+	npc.level = level
+	server.npcs[npc.id] = npc
+	level.npcs[npc.id] = npc
+
+	server.runServerSideNPCEventForPlayer(npc, "onPlayerTouchsMe", player)
+	if npc.character.chatMessage != "virus" {
+		t.Fatalf("direct npc event chat = %q, want virus", npc.character.chatMessage)
+	}
+	npc.character.chatMessage = ""
+
+	player.runServerSideNPCTouchTest()
+
+	if npc.character.chatMessage != "virus" {
+		t.Fatalf("npc chat = %q, want virus", npc.character.chatMessage)
+	}
+}
+
+func TestTriggerActionRunsServerSideNPCAction(t *testing.T) {
+	server := newLoginTestServer(t)
+	enableTestNPCServer(server)
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	server.levels[level.levelName] = level
+	player := NewPlayer(nil, server)
+	player.id = 3
+	player.loaded = true
+	player.levelName = level.levelName
+	player.currentLevel = level
+	player.playerType = PLTYPE_CLIENT3
+	server.players[player.id] = player
+	level.players = []uint16{player.id}
+	npc := NewNPC(LEVELNPC)
+	npc.id = 78
+	npc.npcName = "trigger-test"
+	npc.x = 53
+	npc.y = 71
+	npc.width = 16
+	npc.height = 16
+	npc.script = `function onActionTest(value) {
+		chat = "woah";
+		echo("woah" SPC value);
+	}`
+	npc.level = level
+	server.npcs[npc.id] = npc
+	level.npcs[npc.id] = npc
+
+	server.runLevelNPCTriggerAction(player, 0, 53, 71, []string{"Test", "1"})
+
+	if npc.character.chatMessage != "woah" {
+		t.Fatalf("npc chat = %q, want woah", npc.character.chatMessage)
+	}
+}
+
+func TestApplyGS2NPCActionSetShapeDoesNotToggleNoBlock(t *testing.T) {
+	server := newLoginTestServer(t)
+	npc := NewNPC(LEVELNPC)
+	npc.id = 79
+	npc.npcName = "shape-test"
+	server.npcs[npc.id] = npc
+
+	server.applyGS2NPCAction(gs2VMNPCAction{id: npc.id, shapeType: 1, width: 32, height: 32})
+
+	if npc.width != 32 || npc.height != 32 {
+		t.Fatalf("npc size = %dx%d, want 32x32", npc.width, npc.height)
+	}
+	if npc.blockFlags != 0 {
+		t.Fatalf("npc blockFlags = %d, want 0", npc.blockFlags)
+	}
+}
+
+func TestValidClientFileSignatureRejectsWebPAsPNG(t *testing.T) {
+	if validClientFileSignature("block.png", []byte("RIFF\x66\x00\x00\x00WEBP")) {
+		t.Fatal("webp bytes accepted as png")
+	}
+	if !validClientFileSignature("block.png", []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}) {
+		t.Fatal("png signature rejected")
 	}
 }
 
@@ -2127,6 +2238,45 @@ func TestNCNPCDeleteRemovesFromLiveLevel(t *testing.T) {
 	want := append([]byte{PLO_NPCDEL + 32}, NewBuffer().WriteGInt(npc.id).Bytes()...)
 	if !bytes.Contains(client.outQueue, want) {
 		t.Fatalf("client did not receive NPC delete: % X, want % X", client.outQueue, want)
+	}
+}
+
+func TestClientNPCDeleteIgnoredWhenServerSideEnabled(t *testing.T) {
+	server := newLoginTestServer(t)
+	server.settings.Set("serverside", "true")
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	server.levels[level.levelName] = level
+	npc := NewNPC(LEVELNPC)
+	npc.id = 42
+	npc.image = "block.png"
+	npc.level = level
+	server.npcs[npc.id] = npc
+	level.npcs[npc.id] = npc
+
+	client := NewPlayer(nil, server)
+	client.id = 4
+	client.levelName = level.levelName
+	client.currentLevel = level
+	client.playerType = PLTYPE_CLIENT3
+	client.queueOutgoing = true
+	client.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[client.id] = client
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_NPCDEL)
+	packet.WriteGInt(npc.id)
+	if !client.msgPLI_NPCDEL(packet.Bytes()) {
+		t.Fatalf("msgPLI_NPCDEL returned false")
+	}
+	if server.GetNPC(npc.id) == nil {
+		t.Fatalf("npc was removed from server map")
+	}
+	if _, ok := level.npcs[npc.id]; !ok {
+		t.Fatalf("npc was removed from level map")
+	}
+	if bytes.Contains(client.outQueue, append([]byte{PLO_NPCDEL + 32}, NewBuffer().WriteGInt(npc.id).Bytes()...)) {
+		t.Fatalf("client received NPC delete while serverside enabled: % X", client.outQueue)
 	}
 }
 
@@ -8095,6 +8245,9 @@ func TestNpcPropsUseTypedPropertyStream(t *testing.T) {
 	npc.blockFlags = 1
 	npc.character.headImage = "head1.png"
 	npc.character.bodyImage = "body.png"
+	npc.character.shieldImage = "shield1.png"
+	npc.character.shieldPower = 1
+	npc.character.colors = [5]byte{2, 0, 8, 5, 21}
 
 	done := make(chan struct{}, 1)
 	go func() {
@@ -8127,6 +8280,9 @@ func TestNpcPropsUseTypedPropertyStream(t *testing.T) {
 	want = append(want, NPCPROP_GANI+32, byte(len(npc.character.gani))+32)
 	want = append(want, []byte(npc.character.gani)...)
 	want = append(want, NPCPROP_BOMBS+32, byte(npc.character.bombs)+32)
+	want = append(want, NPCPROP_SHIELDIMAGE+32, byte(npc.character.shieldPower+10)+32, byte(len(npc.character.shieldImage))+32)
+	want = append(want, []byte(npc.character.shieldImage)...)
+	want = append(want, NPCPROP_COLORS+32, 2+32, 0+32, 8+32, 5+32, 21+32)
 	want = append(want, NPCPROP_BLOCKFLAGS+32, npc.blockFlags+32)
 	want = append(want, NPCPROP_HEADIMAGE+32, byte(len(npc.character.headImage))+32)
 	want = append(want, []byte(npc.character.headImage)...)
