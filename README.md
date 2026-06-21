@@ -7,7 +7,7 @@ For their additional work on the old gserver, special thanks go to:
 
 ## About
 
-GServer-Go is a complete Go implementation of the Graal Online game server protocol, rewritten from C++ for simplicity and maintainability. It maintains full binary protocol compatibility with existing Graal clients (v1-v5) while providing a clean, minimal codebase.
+GServer-Go is a Go implementation of the classic GS2 game server protocol, rewritten from C++ for simplicity and maintainability. It keeps binary protocol compatibility with legacy and newer clients while providing a clean, minimal codebase.
 
 **Key Features:**
 - Minimalist architecture (8 files, ~10,000 lines vs 43 C++ files)
@@ -15,7 +15,8 @@ GServer-Go is a complete Go implementation of the Graal Online game server proto
 - List server communication with proper hq_level tier support
 - Player login flow with all pre-warp packets
 - Level loading and warping
-- Remote Control (RC) protocol support (in progress)
+- Remote Control (RC) and NC protocol support
+- Native Go server-side GS2 runtime integration
 
 ## Building
 
@@ -36,19 +37,16 @@ How-to setup a server:
 
 1) Under the accounts folder, rename the text file 'YOURACCOUNT.txt' to your account name.  For example: 'denveous.txt'
 2) Modify defaultaccount.txt to your liking.  This is the default settings new players will start with.  It can also be modified via RC.
-3) Open config/serveroptions.txt and edit it to your liking.  Be sure to modify the settings under "Private server options".  Help for what these options do are available on the forums and in the file itself.
+3) Open config/serveroptions.txt and edit it to your liking.  Be sure to modify the settings under "Private server options".  Help for what these options do is available in the file itself.
 4) Find the line that starts with "staff=" in config/serveroptions.txt.  Replace YOURACCOUNT with your account name.  Anybody who needs RC access must be added to this line with their account names separated by commas.  Additionally, RC users must have their IP range changed to at least *.*.*.* in their account to connect.
-5) Port forward if needed. (Many threads on this topic exist in the forums.  If you are having trouble, seek them out.  Try the tutorials forum.)  Basically, if you are behind a router and your computer isn't set to be the "DMZ", you will need to port forward.
+5) Port forward if needed.  Basically, if you are behind a router and your computer isn't set to be the "DMZ", you will need to port forward.
 6) Run `go run .` -- enjoy.
-7) Report any bugs on the Graal forums or GitHub issues.
 
 For LAN or direct-connect testing, set `listserver = false` in `config/serveroptions.txt`. That disables the listserver connection so clients can connect straight to the gserver without depending on the public hub. Multiple listservers can be configured with comma-separated `listip` and `listport` values.
 
 ## Implementation Status
 
-**Progress: 70% (31/44 files convertible without V8)**
-
-**Note:** 13 remaining files are V8-specific (scripting/*) or blocked on V8 integration. All non-V8 conversion work is complete.
+**Progress:** Core networking, level loading, account handling, RC/NC tooling, listserver integration, file transfers, and server-side scripting are implemented and under active parity testing.
 
 **Note on Completion:** The percentage above represents **files converted from C++ to Go**, not functional completion. Many systems have code converted but are not yet tested or fully functional. See "Testing Status" below for actual working features.
 
@@ -84,8 +82,8 @@ For LAN or direct-connect testing, set `listserver = false` in `config/serveropt
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| NPC System | 🚧 Partial | NPC struct exists, AI and script integration pending |
-| Weapon System | 🚧 Partial | Weapon struct exists, script loading pending |
+| NPC System | 🚧 Partial | Level NPCs, NPC-DBs, events, shape handling, and prop updates work; parity still expanding |
+| Weapon System | 🚧 Partial | Weapon loading, NC editing, bytecode storage, and server-side hooks work; runtime behavior still expanding |
 | Player Scripts | 🚧 Partial | UPDATEGANI, UPDATESCRIPT, UPDATECLASS handlers exist |
 | Packet Handlers | 🚧 Partial | Basic handlers done, some PLI packets need completion |
 
@@ -93,12 +91,11 @@ For LAN or direct-connect testing, set `listserver = false` in `config/serveropt
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| GS2 Scripting (Server-side) | ❌ Pending | V8 integration for server-side script execution |
-| GS2 Compiler (Server-side) | ❌ Pending | Server-side GS2 compiler not yet implemented |
+| Full script parity | ❌ Pending | The native Go VM exists, but more built-ins and edge-case syntax still need parity work |
 | GS2 Scripting (Client-side) | ✅ Supported | Client-side GS2 scripts work normally with existing GS2 compiler |
-| File Transfers | ❌ Pending | Upload/download system |
+| Full gameplay parity | ❌ Pending | More baddy, combat, NPC, and weapon behavior still needs real-client testing |
 
-**Note:** V8 is used ONLY for server-side script execution. Client-side GS2 scripts continue to work with the existing GS2 compiler - no changes to client-side script handling. A server-side GS2 compiler has not been implemented yet.
+**Note:** Server-side scripts run through the native Go VM module. Clientside compile feedback still uses the configured external compiler.
 
 ## Testing Status
 
@@ -118,8 +115,8 @@ Still needs broader live testing:
 
 - Combat/death edge cases beyond the basic respawn reload path.
 - Long idle soak testing after the timeout cleanup fix.
-- RC/NC protocol behavior with real RC/NC clients.
-- Server-side NPC/weapon scripting, which remains blocked on the missing server-side GS2/V8 runtime.
+- RC/NC protocol behavior across more real client builds.
+- Server-side NPC/weapon scripting parity beyond the current native Go VM coverage.
 
 **Last Updated:** 2026-06-15
 
@@ -153,16 +150,11 @@ Still needs broader live testing:
 | Game World Entry | ❓ Unverified | .nw and .zelda parsers implemented, needs testing with actual client |
 | Level Geometry | ❓ Unverified | Board data parsed from both formats, warp() sends level data |
 | Player Movement | ❓ Unverified | Depends on client receiving valid level data |
-| NPC Display | ❓ Unverified | NPCs loaded from level files, script execution pending V8 |
+| NPC Display | ❓ Needs more testing | NPCs load from level files and server-side scripts can update their props |
 
-### Critical Blocker
+### Current Focus
 
-**V8 Scripting Integration** - Both .nw and .zelda level parsers are implemented and functional, but:
-1. Server-side GS2/GS5 script execution requires V8 integration
-2. NPC AI and weapon behaviors need script execution
-3. Full gameplay requires scripting system for interactivity
-
-**Estimated Functional Completion:** ~50% (networking works, login works, both level parsers work, scripting blocked)
+The main active work is protocol parity, RC/NC parity, live level updates, mixed-version player sync, and server-side VM behavior.
 
 ## Architecture
 
@@ -234,45 +226,45 @@ servercount specifies the number of servers.  In the default file, that is 1 ser
 
 All of the optional overrides will take precedence over the options defined in **serveroptions.txt**.
 
-## Special Graal Reborn NPC commands
+## Special NPC commands
 
-The Graal Reborn gserver has a couple special NPC commands built in.
+The gserver has a couple special NPC commands built in.
 
 join somefile;
-    Much like official Graal's server-side join command, this command searches for somefile.txt and appends the contents to the end of the NPC script.
+    Much like the classic server-side join command, this command searches for somefile.txt and appends the contents to the end of the NPC script.
 
 singleplayer
     This command is like the sparringzone command.  When placed by itself with no semi-colon inside an NPC, it signifies that the level is "singleplayer."  (SEE: Singleplayer Levels).
 
 ## Singleplayer Levels
 
-The Graal Reborn gserver has the ability to toggle a level as "singleplayer."  In this mode, the user cannot see any other player in the level.  Any changes they make to the level are not replicated to other users.  They are, in essence, in a level by themselves.
+The gserver has the ability to toggle a level as "singleplayer."  In this mode, the user cannot see any other player in the level.  Any changes they make to the level are not replicated to other users.  They are, in essence, in a level by themselves.
 
 To activate singleplayer mode, add an NPC to the level and add the single command "singleplayer" to the level, much like how the "sparringzone" command works.
 
 ## Group Maps
 
-Like singleplayer levels, group maps allow only players in a group to see each other in a level.  Player groups can be managed via the gr.setgroup and gr.setlevelgroup triggeractions (SEE: Graal Reborn special triggeractions).
+Like singleplayer levels, group maps allow only players in a group to see each other in a level.  Player groups can be managed via the gr.setgroup and gr.setlevelgroup triggeractions.
 
 Individual levels cannot be set as group levels; instead, an entire map must be specified as a group map.  The "groupmaps" server option specifies a comma-delimited list of maps that can contain groups.
 
-## Graal Reborn special client flags
+## Special client flags
 
 There are a few special client flags built into the gserver.  These are:
 gr.x
 gr.y
 gr.z
 
-These flags are used by the -gr_movement weapon included in the server weapons folder to simulate the smooth movement as found in the Graal clients 2.3 and up.
+These flags are used by the -gr_movement weapon included in the server weapons folder to simulate smooth movement for newer clients.
 
 If you don't want the gserver to recognize these flags, set the flaghack_movement setting to false in serveroptions.txt.
 
 Also, if flaghack_ip is enabled in the serveroptions.txt file, you can gain access to the following:
 gr.ip
 
-## Graal Reborn special triggeractions
+## Special triggeractions
 
-The Graal Reborn gserver has a couple unique triggeractions built into it.  They can be enabled/disabled by altering the setting that controls their group in serveroptions.txt.  They are as follows:
+The gserver has a couple unique triggeractions built into it.  They can be enabled/disabled by altering the setting that controls their group in serveroptions.txt.  They are as follows:
 
 ### Controlled by the setting triggerhack_weapons:
     triggeraction 0,0,gr.addweapon,weapon1,weapon2,weapon3;
@@ -410,7 +402,7 @@ All fixes based on direct C++ source analysis in SESSION01/GServer-v2.
 
 **Fixed: SVO_SERVERHQLEVEL packet**
 - Added hq_level packet sending to listserver
-- Server tier now displays correctly (Bronze/Silver/Gold) instead of "Graal3D"
+- Server tier now displays correctly (Bronze/Silver/Gold) instead of the old fallback label
 
 **Added: Complete login flow**
 - Implemented all 10+ pre-warp packets from C++ sendLoginClient()
@@ -437,7 +429,7 @@ All fixes based on direct C++ source analysis in SESSION01/GServer-v2.
 
 Current known issues:
 
-- Server-side GS2/V8 scripting is still missing, so NPC/weapon/server-script behavior is incomplete.
+- Server-side scripting exists through the native Go VM, but more syntax and built-ins still need parity work.
 - Combat, death, and respawn now reach the level reload path, but full gameplay rules still need broader client testing.
 - RC/NC packet handlers exist but still need verification with real RC/NC clients.
 - File upload/download behavior needs more work and live testing.
@@ -452,8 +444,8 @@ Current known issues:
 1. **Combat/death verification** - Finish testing hurt, death, respawn, item drops, and player state sync.
 2. **NPC system** - Complete NPC runtime behavior and AI/script integration.
 3. **Weapon system** - Complete weapon runtime behavior beyond packet/script loading.
-4. **Server-side GS2 compiler** - Create GS2 compiler/runtime path for server-side scripts.
-5. **Server-side scripting** - V8 or replacement runtime integration for NPC/weapon scripts.
+4. **Server-side VM parity** - Continue adding syntax, built-ins, NPC/player objects, and event behavior.
+5. **Script tooling** - Continue tightening compiler feedback, bytecode storage, reload behavior, and docs in the VM module.
 6. **File transfer system** - Upload/download functionality and real-client verification.
 7. **RC/NC verification** - Test the implemented admin/client tooling packet handlers with real clients.
 
@@ -461,7 +453,7 @@ Current known issues:
 
 Based on [GServer-v2](https://github.com/xtjoeytx/GServer-v2) C++ implementation.
 
-Original GServer by Stefan Knorr and the Graal Reborn/Preagonal/OpenGraal community.
+Original GServer by Stefan Knorr and the preservation community.
 
 ## License
 
