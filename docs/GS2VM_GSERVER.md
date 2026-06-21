@@ -61,7 +61,9 @@ Handled result groups:
 - `setshape()` updates NPC rectangular blocking data.
 - `setshape2()` updates NPC tile-shape data.
 - Setting `chat` updates the NPC chat/message property.
+- `showcharacter()` switches the NPC to character-style rendering and sends character props.
 - `warpto(level, x, y)` attaches the NPC to the target level and sends NPC prop updates.
+- Level NPC triggeractions map `leftmouse`, `rightmouse`, `middlemouse`, and `doublemouse` to `onActionLeftMouse`, `onActionRightMouse`, `onActionMiddleMouse`, and `onActionDoubleMouse`.
 
 ## Socket Actions
 

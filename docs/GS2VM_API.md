@@ -166,6 +166,8 @@ The VM queues a client trigger result for the gserver bridge.
 
 Client `triggerServer("gui", name, args...)` and `triggerServer("weapon", name, args...)` arrive through triggeraction handling and dispatch to matching server-side script events.
 
+Level NPC triggeractions dispatch to server-side NPC events. Generic actions dispatch to `onAction<Name>`. Mouse actions dispatch to the Graal event names: `onActionLeftMouse`, `onActionRightMouse`, `onActionMiddleMouse`, and `onActionDoubleMouse`.
+
 ## Drawing Functions
 
 - `showimg(index, image, x, y)`
@@ -195,6 +197,7 @@ File operations are rooted to the configured VM file root and reject absolute pa
 
 ## NPC Functions
 
+- `showcharacter()`
 - `setshape(shapeType, width, height)`
 - `setshape2(width, height, tileTypes)`
 - `warpto(level, x, y)`
@@ -214,7 +217,9 @@ File operations are rooted to the configured VM file root and reject absolute pa
 
 These only emit NPC actions when the VM run has an NPC ID.
 
-Current NPC scripts can also set `this.image`, `this.chat`, `this.dir`, `this.ani`, `this.head`, `this.body`, `this.horseimg`, `this.hearts`, `this.gralats`, `this.arrows`, `this.bombs`, `this.darts`, `this.glovepower`, and `this.ap`. Bare `chat`, `image`, and the same property names are collected for the current NPC too.
+Current NPC scripts can also set `this.image`, `this.chat`, `this.dir`, `this.ani`, `this.nick`, `this.head`, `this.headimg`, `this.body`, `this.bodyimg`, `this.shieldimg`, `this.horseimg`, `this.hearts`, `this.gralats`, `this.arrows`, `this.bombs`, `this.darts`, `this.glovepower`, `this.shieldpower`, `this.ap`, and `this.colors[0..4]`. Bare `chat`, `image`, and the same property names are collected for the current NPC too.
+
+`showcharacter()` marks the NPC as character-style. Character NPCs use the same visible character fields as players: nick, head/body/shield images, direction, gani, and color indexes.
 
 ## TSocket Functions And Objects
 

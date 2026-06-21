@@ -1,6 +1,6 @@
-# GS2 VM Dock
+# GS2 VM Documentation
 
-Central dock for the native Go GS2 VM docs.
+Central documentation for the native Go GS2 VM.
 
 This documents implemented behavior only. Planned parity work belongs in issues or implementation notes, not in this support matrix.
 
