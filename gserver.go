@@ -3959,7 +3959,11 @@ func (p *Player) sendPLO_NPCPROPS(npc *NPC) bool {
 		buf.WriteGChar(NPCPROP_HORSEIMAGE).WriteGChar(byte(len(npc.character.horseImage))).Write([]byte(npc.character.horseImage))
 	}
 	if npc.character.headImage != "" {
-		buf.WriteGChar(NPCPROP_HEADIMAGE).WriteGChar(byte(len(npc.character.headImage))).Write([]byte(npc.character.headImage))
+		headLen := len(npc.character.headImage)
+		if headLen > 155 {
+			headLen = 155
+		}
+		buf.WriteGChar(NPCPROP_HEADIMAGE).WriteGChar(byte(headLen + 100)).Write([]byte(npc.character.headImage[:headLen]))
 	}
 	if npc.character.bodyImage != "" {
 		buf.WriteGChar(NPCPROP_BODYIMAGE).WriteGChar(byte(len(npc.character.bodyImage))).Write([]byte(npc.character.bodyImage))
@@ -5291,17 +5295,20 @@ func (p *Player) sendPlayerPropDeltasToCurrentLevel(common, legacyMove, preciseM
 		if !ok || pl == nil || pl.conn == nil {
 			continue
 		}
-		moveProps := legacyMove
-		if playerSupportsPreciseMovement(pl) {
-			moveProps = preciseMove
-		}
-		if len(common) == 0 && len(moveProps) == 0 {
+		if len(common) == 0 && len(legacyMove) == 0 && len(preciseMove) == 0 {
 			continue
 		}
 		out := NewBuffer()
 		out.WriteByte(PLO_OTHERPLPROPS).WriteGShort(p.id)
-		out.Write(common)
-		out.Write(moveProps)
+		if playerSupportsPreciseMovement(p) {
+			out.Write(preciseMove)
+			out.Write(common)
+			out.Write(legacyMove)
+		} else {
+			out.Write(common)
+			out.Write(legacyMove)
+			out.Write(preciseMove)
+		}
 		pl.sendPacket(append(out.Bytes(), '\n'))
 	}
 }

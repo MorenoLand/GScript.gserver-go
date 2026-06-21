@@ -567,6 +567,8 @@ func (s *Server) runLevelNPCTriggerAction(player *Player, npcID uint32, x, y int
 	if len(parts) > 1 {
 		args = append(args, parts[1:]...)
 	}
+	matchX := x * 8
+	matchY := y * 8
 	for _, npc := range level.npcs {
 		if npc == nil || strings.TrimSpace(npc.script) == "" {
 			continue
@@ -574,7 +576,7 @@ func (s *Server) runLevelNPCTriggerAction(player *Player, npcID uint32, x, y int
 		if npcID != 0 && npc.id != npcID {
 			continue
 		}
-		if npcID == 0 && !npcMatchesTriggerPoint(npc, x, y) {
+		if npcID == 0 && !npcMatchesTriggerPoint(npc, matchX, matchY) {
 			continue
 		}
 		s.runServerSideNPCEventForPlayer(npc, eventName, player, args...)
@@ -628,27 +630,15 @@ func npcMatchesTriggerPoint(npc *NPC, x, y int) bool {
 	width := npc.width
 	height := npc.height
 	if width <= 0 {
-		width = 16
+		width = 32
 	}
 	if height <= 0 {
-		height = 16
+		height = 32
 	}
-	if x >= nx && y >= ny && x < nx+width && y < ny+height {
+	if x >= nx && y >= ny && x <= nx+width && y <= ny+height {
 		return true
 	}
-	gx := x / 2
-	gy := y / 2
-	gnx := nx / 16
-	gny := ny / 16
-	gw := width / 16
-	gh := height / 16
-	if gw <= 0 {
-		gw = 1
-	}
-	if gh <= 0 {
-		gh = 1
-	}
-	return gx >= gnx && gy >= gny && gx < gnx+gw && gy < gny+gh
+	return false
 }
 
 func (s *Server) runServerSideEventForActiveScripts(eventName string, player *Player, eventArgs ...string) {

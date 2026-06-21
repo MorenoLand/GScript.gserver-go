@@ -865,6 +865,41 @@ func TestApplyGS2NPCActionAppliesCorePropsAndState(t *testing.T) {
 	}
 }
 
+func TestServerSideNPCShowCharacterAppliesClassicCharacterScriptProps(t *testing.T) {
+	server := newLoginTestServer(t)
+	enableTestNPCServer(server)
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	npc := NewNPC(LEVELNPC)
+	npc.id = 91
+	npc.level = level
+	npc.script = `function onCreated() {
+		showcharacter();
+		this.nick = "Bob";
+		this.headimg = "head0.png";
+		this.shieldimg = "shield1.png";
+		this.bodyimg = "body.png";
+		this.colors[0] = "orange";
+		this.colors[1] = "white";
+		this.colors[2] = "blue";
+		this.colors[3] = "red";
+		this.colors[4] = "black";
+		shieldpower = 1;
+		this.dir = 2;
+	}`
+	level.npcs[npc.id] = npc
+	server.npcs[npc.id] = npc
+
+	server.runServerSideNPCEventForPlayer(npc, "onCreated", nil)
+
+	if npc.image != "#c#" || npc.character.nickName != "Bob" || npc.character.headImage != "head0.png" || npc.character.shieldImage != "shield1.png" || npc.character.bodyImage != "body.png" || npc.character.shieldPower != 1 || npc.character.sprite != 2 {
+		t.Fatalf("npc character props = image %q nick %q head %q shield %q body %q shieldpower %d sprite %d", npc.image, npc.character.nickName, npc.character.headImage, npc.character.shieldImage, npc.character.bodyImage, npc.character.shieldPower, npc.character.sprite)
+	}
+	if npc.character.colors != [5]byte{2, 0, 8, 5, 21} {
+		t.Fatalf("npc colors = %#v", npc.character.colors)
+	}
+}
+
 func TestPlayerMovementRunsServerSideNPCPlayerTouchsMe(t *testing.T) {
 	server := newLoginTestServer(t)
 	enableTestNPCServer(server)
@@ -924,8 +959,8 @@ func TestTriggerActionRunsServerSideNPCAction(t *testing.T) {
 	npc := NewNPC(LEVELNPC)
 	npc.id = 78
 	npc.npcName = "trigger-test"
-	npc.x = 53
-	npc.y = 71
+	npc.x = 53 * 8
+	npc.y = 71 * 8
 	npc.width = 16
 	npc.height = 16
 	npc.script = `function onActionTest(value) {
@@ -1015,6 +1050,58 @@ function onActionDoubleMouse() chat = "double";`
 		if npc.character.chatMessage != want {
 			t.Fatalf("%s npc chat = %q, want %q", action, npc.character.chatMessage, want)
 		}
+	}
+}
+
+func TestNPCTriggerPointUsesCPlusPlusDefaultBounds(t *testing.T) {
+	npc := NewNPC(LEVELNPC)
+	npc.x = 10 * 16
+	npc.y = 20 * 16
+
+	cases := []struct {
+		x, y int
+		want bool
+	}{
+		{10 * 16, 20 * 16, true},
+		{10*16 + 32, 20*16 + 32, true},
+		{10*16 + 33, 20*16 + 16, false},
+		{10*16 + 16, 20*16 + 33, false},
+	}
+	for _, tc := range cases {
+		if got := npcMatchesTriggerPoint(npc, tc.x, tc.y); got != tc.want {
+			t.Fatalf("npcMatchesTriggerPoint(%d,%d) = %v, want %v", tc.x, tc.y, got, tc.want)
+		}
+	}
+}
+
+func TestTriggerActionMouseUsesDefaultNPCBounds(t *testing.T) {
+	server := newLoginTestServer(t)
+	enableTestNPCServer(server)
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	server.levels[level.levelName] = level
+	player := NewPlayer(nil, server)
+	player.id = 3
+	player.loaded = true
+	player.levelName = level.levelName
+	player.currentLevel = level
+	player.playerType = PLTYPE_CLIENT3
+	server.players[player.id] = player
+	level.players = []uint16{player.id}
+	npc := NewNPC(LEVELNPC)
+	npc.id = 81
+	npc.npcName = "default-hitbox-test"
+	npc.x = 30 * 16
+	npc.y = 30 * 16
+	npc.script = `function onActionLeftMouse() chat = "left";`
+	npc.level = level
+	server.npcs[npc.id] = npc
+	level.npcs[npc.id] = npc
+
+	server.runLevelNPCTriggerAction(player, 0, 62, 62, []string{"leftmouse"})
+
+	if npc.character.chatMessage != "left" {
+		t.Fatalf("npc chat = %q, want left", npc.character.chatMessage)
 	}
 }
 
@@ -7352,6 +7439,12 @@ func TestPlayerPropsForwardsChangedPropsToOtherPlayers(t *testing.T) {
 	want = append(want, []byte("hi")...)
 	want = append(want, PLPROP_PSTATUSMSG+32, 7+32)
 	want = append(want, PLPROP_X+32, 64+32, PLPROP_Y+32, 65+32)
+	wantX2 := NewBuffer().WriteGShort(64 * 8 * 2).Bytes()
+	wantY2 := NewBuffer().WriteGShort(65 * 8 * 2).Bytes()
+	want = append(want, PLPROP_X2+32)
+	want = append(want, wantX2...)
+	want = append(want, PLPROP_Y2+32)
+	want = append(want, wantY2...)
 	want = append(want, '\n')
 
 	clientConn.SetReadDeadline(time.Now().Add(time.Second))
@@ -7961,8 +8054,6 @@ func TestPlayerPropsForwardPreciseMovementToModernPlayers(t *testing.T) {
 	id := NewBuffer()
 	id.WriteGShort(p.id)
 	want := append([]byte{PLO_OTHERPLPROPS + 32}, id.Bytes()...)
-	want = append(want, PLPROP_GANI+32, 4+32)
-	want = append(want, []byte("walk")...)
 	wantX2 := NewBuffer()
 	wantX2.WriteGShort(64 * 8 * 2)
 	wantY2 := NewBuffer()
@@ -7971,6 +8062,10 @@ func TestPlayerPropsForwardPreciseMovementToModernPlayers(t *testing.T) {
 	want = append(want, wantX2.Bytes()...)
 	want = append(want, PLPROP_Y2+32)
 	want = append(want, wantY2.Bytes()...)
+	want = append(want, PLPROP_GANI+32, 4+32)
+	want = append(want, []byte("walk")...)
+	want = append(want, PLPROP_X+32, byte(64)+32)
+	want = append(want, PLPROP_Y+32, byte(65)+32)
 	want = append(want, '\n')
 
 	clientConn.SetReadDeadline(time.Now().Add(time.Second))
@@ -7982,6 +8077,65 @@ func TestPlayerPropsForwardPreciseMovementToModernPlayers(t *testing.T) {
 
 	if string(got) != string(want) {
 		t.Fatalf("modern player prop delta = % X, want % X", got, want)
+	}
+}
+
+func TestLegacyPlayerPropsForwardCommonLegacyThenPreciseMovement(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	server := newLoginTestServer(t)
+	level := NewLevel()
+	level.levelName = "onlinestartlocal.nw"
+	server.levels[level.levelName] = level
+	p := &Player{id: 1, conn: serverConn, server: server, currentLevel: level, playerType: PLTYPE_CLIENT, versionId: 222, loaded: true, encryption: *NewEncryption()}
+	p.levelName = "onlinestartlocal.nw"
+	other := &Player{id: 2, conn: serverConn, server: server, currentLevel: level, playerType: PLTYPE_CLIENT3, versionId: 611, encryption: *NewEncryption()}
+	other.levelName = "onlinestartlocal.nw"
+	other.encryption.SetGen(ENCRYPT_GEN_1)
+	server.players[p.id] = p
+	server.players[other.id] = other
+	level.players = []uint16{p.id, other.id}
+
+	packet := NewBuffer()
+	packet.WriteByte(PLI_PLAYERPROPS)
+	packet.WriteGChar(PLPROP_GANI).WriteGChar(4).Write([]byte("walk"))
+	packet.WriteGChar(PLPROP_X).WriteGChar(64 * 2)
+	packet.WriteGChar(PLPROP_Y).WriteGChar(65 * 2)
+
+	done := make(chan struct{}, 1)
+	go func() {
+		p.msgPLI_PLAYERPROPS(packet.Bytes())
+		done <- struct{}{}
+	}()
+
+	id := NewBuffer()
+	id.WriteGShort(p.id)
+	want := append([]byte{PLO_OTHERPLPROPS + 32}, id.Bytes()...)
+	want = append(want, PLPROP_GANI+32, 4+32)
+	want = append(want, []byte("walk")...)
+	want = append(want, PLPROP_X+32, byte(64*2)+32)
+	want = append(want, PLPROP_Y+32, byte(65*2)+32)
+	wantX2 := NewBuffer()
+	wantX2.WriteGShort(64 * 16 * 2)
+	wantY2 := NewBuffer()
+	wantY2.WriteGShort(65 * 16 * 2)
+	want = append(want, PLPROP_X2+32)
+	want = append(want, wantX2.Bytes()...)
+	want = append(want, PLPROP_Y2+32)
+	want = append(want, wantY2.Bytes()...)
+	want = append(want, '\n')
+
+	clientConn.SetReadDeadline(time.Now().Add(time.Second))
+	got := make([]byte, len(want))
+	if _, err := io.ReadFull(clientConn, got); err != nil {
+		t.Fatalf("read legacy player prop delta: %v", err)
+	}
+	<-done
+
+	if string(got) != string(want) {
+		t.Fatalf("legacy player prop delta = % X, want % X", got, want)
 	}
 }
 
@@ -8428,7 +8582,7 @@ func TestNpcPropsUseTypedPropertyStream(t *testing.T) {
 	want = append(want, []byte(npc.character.shieldImage)...)
 	want = append(want, NPCPROP_COLORS+32, 2+32, 0+32, 8+32, 5+32, 21+32)
 	want = append(want, NPCPROP_BLOCKFLAGS+32, npc.blockFlags+32)
-	want = append(want, NPCPROP_HEADIMAGE+32, byte(len(npc.character.headImage))+32)
+	want = append(want, NPCPROP_HEADIMAGE+32, byte(len(npc.character.headImage)+100)+32)
 	want = append(want, []byte(npc.character.headImage)...)
 	want = append(want, NPCPROP_BODYIMAGE+32, byte(len(npc.character.bodyImage))+32)
 	want = append(want, []byte(npc.character.bodyImage)...)
