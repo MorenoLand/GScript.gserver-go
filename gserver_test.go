@@ -9302,8 +9302,8 @@ func TestSendWeaponSendsBytecodeWithoutSourceForModernClients(t *testing.T) {
 	<-done
 	got = got[:n]
 
-	if !bytes.Contains(got, []byte{PLO_UNKNOWN197 + 32}) {
-		t.Fatalf("weapon bytecode packet missing header advertisement: % X", got)
+	if bytes.Contains(got, []byte{PLO_UNKNOWN197 + 32}) {
+		t.Fatalf("weapon bytecode delivery is disabled during login: % X", got)
 	}
 	if bytes.Contains(got, []byte{PLO_RAWDATA + 32}) {
 		t.Fatalf("weapon add should not push raw bytecode immediately: % X", got)

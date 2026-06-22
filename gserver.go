@@ -4281,7 +4281,7 @@ func (p *Player) sendWeapon(weapon *Weapon) bool {
 		return false
 	}
 	scriptsEnabled := p.server != nil && p.server.npcServerRunning()
-	sendBytecode := scriptsEnabled && len(weapon.bytecode) > 0 && p.versionId >= 300
+	sendBytecode := false
 	buf := NewBuffer()
 	buf.WriteByte(PLO_NPCWEAPONADD)
 	buf.WriteGChar(byte(len(weapon.name))).Write([]byte(weapon.name))
