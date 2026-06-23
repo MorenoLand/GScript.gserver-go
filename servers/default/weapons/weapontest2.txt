@@ -3,6 +3,7 @@ REALNAME test2
 IMAGE bcalarmclock.png
 BYTECODE weapontest2.gs2bc
 SCRIPT
+findplayer("guest").addweapon(this);
 //#CLIENTSIDE
 
 function onWeaponFired() {
