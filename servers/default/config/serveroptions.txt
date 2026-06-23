@@ -12,9 +12,6 @@ debugmode = true
 # This is useful while tracing protocol framing, but noisy during normal testing.
 packetdebugmode = true
 
-# External GS2 compiler used by NC weapon/class saves for clientside syntax feedback and bytecode output.
-gs2compiler = tools\gs2compiler\gs2parser.exe
-
 # Specifies where players go when they say "unstick me".
 unstickmelevel = onlinestartlocal.nw
 unstickmex = 30
